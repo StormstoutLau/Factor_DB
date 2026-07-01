@@ -1,0 +1,63 @@
+# ============================
+# Database & Data Files
+# ============================
+*.duckdb
+*.duckdb.tmp/
+data/
+*.parquet
+*.feather
+*.csv
+*.xlsx
+*.zip
+
+# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ============================
+# Virtual Environment
+# ============================
+venv/
+.venv/
+env/
+.env
+
+# ============================
+# IDE & Editor
+# ============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ============================
+# OS
+# ============================
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# ============================
+# Testing
+# ============================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+benchmark_results/
+
+# ============================
+# Logs & Temp
+# ============================
+*.log
+*.tmp
+temp/
+tmp/
