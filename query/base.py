@@ -143,7 +143,8 @@ class BaseQuery(ABC):
 
     def _build_pit_subquery(self, table: str, pk_columns: list[str],
                              extra_conditions: str = '1=1',
-                             as_of: Optional[date] = None) -> str:
+                             as_of: Optional[date] = None,
+                             non_null_columns: Optional[list[str]] = None) -> str:
         """构建 PIT 子查询筛选条件
 
         返回 SQL 片段，用于 WHERE 子句中过滤每个主键的最新版本。
@@ -153,6 +154,7 @@ class BaseQuery(ABC):
             pk_columns: 主键列（不含 loaded_at）
             extra_conditions: 额外过滤条件
             as_of: PIT 截止时间，None 表示取最新版本
+            non_null_columns: 必须非 NULL 的列（用于排除仅含元数据更新的空壳行）
 
         Returns:
             SQL 子查询字符串，用于 IN 条件
@@ -160,11 +162,17 @@ class BaseQuery(ABC):
         pk_list = ', '.join(pk_columns)
         time_filter = f"AND loaded_at <= '{as_of}'" if as_of else ''
 
+        null_filters = ''
+        if non_null_columns:
+            null_filters = ' AND ' + ' AND '.join(
+                f'{col} IS NOT NULL' for col in non_null_columns
+            )
+
         return f'''
             ({pk_list}, loaded_at) IN (
                 SELECT {pk_list}, MAX(loaded_at)
                 FROM {table}
-                WHERE {extra_conditions} {time_filter}
+                WHERE {extra_conditions} {time_filter} {null_filters}
                 GROUP BY {pk_list}
             )
         '''

@@ -108,7 +108,8 @@ class PriceQuery(BaseQuery):
         stock_filter = self._build_stock_filter(filter)
         pit_filter = self._build_pit_subquery(
             'daily_prices', ['trade_date', 'stock_code'],
-            as_of=filter.as_of
+            as_of=filter.as_of,
+            non_null_columns=['close']
         )
 
         sql = f'''
@@ -226,7 +227,8 @@ class PriceQuery(BaseQuery):
         )
         pit_filter = self._build_pit_subquery(
             'daily_prices', ['trade_date', 'stock_code'],
-            as_of=as_of
+            as_of=as_of,
+            non_null_columns=[field]
         )
 
         # 复权处理
