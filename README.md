@@ -1,353 +1,372 @@
 # Factor_DB
 
-基于 DuckDB 的高性能量化金融数据存储系统，专为 A 股市场设计。
+A high-performance quantitative financial data storage system built on **DuckDB**, designed for the China A-share market.
 
-## 核心特性
+## Key Features
 
-- **高性能**: 向量化查询引擎，比 pandas 快 2-5 倍（数据规模越大优势越明显）
-- **低耦合**: 模块化设计，各组件独立可替换
-- **高内聚**: 单一职责，每个模块只做一件事
-- **兼容性**: 支持 Level 1 分钟数据、日 K 数据、因子数据
-- **易扩展**: 插件式架构，易于添加新数据源
-- **多数据源**: 支持宏观经济数据、舆情数据、另类数据存储与查询
-- **多源分析**: 支持宏观-因子关联、舆情因子、多维度融合分析
+- **High Performance**: Vectorized query engine, 2-5x faster than pandas (advantage grows with data scale)
+- **Wide Table Architecture**: Factor data stored as `(trade_date, stock_code)` primary key with one column per factor — 50x lower index memory vs. traditional EAV long-table design
+- **Dual-Track Storage**: `factor_wide` (latest version for daily queries) + `factor_history` (all versions for PIT backtesting & audit)
+- **Level 1 Parquet Partitioning**: Hive-style partitioned Parquet files with partition pruning — handles 2.1 billion rows (21 billion tick records) on 32GB RAM
+- **PIT (Point-in-Time) Queries**: Query factor/price state at any historical timestamp with NULL-safe filtering
+- **Modular Design**: Loosely coupled, highly cohesive — each module has a single responsibility
+- **Multi-Source Analytics**: Macro-factor linkage, sentiment factors, multi-dimensional fusion analysis
+- **Plugin Architecture**: Easily extendable to new data sources
 
-## 项目结构
+## Project Structure
 
 ```
 Factor_DB/
-├── core/                    # 核心引擎层
-│   ├── connection.py        # DuckDB 连接管理（单例模式、线程安全）
-│   ├── schema.py            # 数据库表结构定义与索引管理
-│   └── metadata_manager.py  # 元数据统一管理器（数据分类/数据源/数据字典）
-├── loaders/                 # 数据加载层
-│   ├── base.py              # 加载器基类（抽象接口）
-│   ├── level1_loader.py     # Level 1 分钟数据加载（Feather 格式）
-│   ├── daily_loader.py      # 日 K 数据加载（pkl/csv/parquet/feather）
-│   ├── macro_loader.py      # 宏观经济数据加载（GDP/CPI/PMI/M2等）
-│   ├── news_loader.py       # 舆情数据加载（新闻/研报情感分析）
-│   └── alternative_loader.py # 另类数据加载（卫星/产业链/电商数据）
-├── query/                   # 查询接口层
-│   ├── price_query.py       # 价格数据查询（日 K / Level 1 / 矩阵）
-│   ├── factor_query.py      # 因子数据查询（截面 / IC / 统计）
-│   ├── screen.py            # 条件选股（多因子打分 / 分位数）
-│   ├── macro_query.py       # 宏观数据查询（矩阵/同比/统计/宏观环境识别）
-│   ├── sentiment_query.py   # 舆情数据查询（股票舆情/情感聚合/选股）
-│   └── alternative_query.py # 另类数据查询（时间序列/与价格相关性）
-├── analytics/               # 分析模块（新增）
-│   ├── macro_factor_link.py # 宏观-因子关联分析（相关性/宏观因子构建）
-│   ├── sentiment_factor.py  # 舆情因子构建与信号生成
-│   └── multi_source_analysis.py # 多源数据融合分析（综合评分/多维筛选）
-├── adapters/                # 适配器层（兼容性）
-│   ├── pandas_adapter.py    # pandas DataFrame 格式转换、技术指标
-│   └── engine_adapter.py    # Factor_Trading_v3.0 回测引擎兼容层
-├── utils/                   # 工具模块
-│   ├── logger.py            # 日志配置（彩色输出、文件记录）
-│   ├── config.py            # 配置管理（JSON/环境变量）
-│   └── validators.py        # 数据验证（价格/因子/Level 1）
-├── tests/                   # 测试套件（49 个测试用例，全部通过）
-├── benchmarks/              # 性能基准测试
-├── docs/                    # 文档
-│   ├── ARCHITECTURE.md      # 架构设计文档
-│   ├── LOCAL_DATA_STORAGE_ANALYSIS.md  # 本地存储方案分析
-│   ├── LEVEL1_DUCKDB_ANALYSIS.md       # Level 1 数据支持性分析
-│   └── FUTURE_EXTENSION_PLAN.md        # 扩展方案设计文档
-└── requirements.txt         # 依赖管理
+├── core/                        # Core Engine
+│   ├── connection.py            #   DuckDB connection pool (singleton, thread-safe, read/write split)
+│   ├── schema.py                #   Schema management (wide table, history table, migration, PIVOT/UNPIVOT)
+│   └── metadata_manager.py      #   Metadata manager (categories / sources / dictionary)
+├── loaders/                     # Data Loaders
+│   ├── base.py                  #   Abstract base class
+│   ├── daily_loader.py          #   Daily OHLCV + wide-table factor loader (Upsert + dual-write)
+│   ├── level1_loader.py         #   Level 1 tick data loader (Feather → Parquet partition converter)
+│   ├── csmar_loader.py          #   CSMAR factor data loader (zip/xlsx auto-parsing)
+│   ├── macro_loader.py          #   Macro economic data loader (GDP/CPI/PMI/M2)
+│   ├── news_loader.py           #   News & report sentiment loader
+│   └── alternative_loader.py    #   Alternative data loader (satellite/supply chain/e-commerce)
+├── query/                       # Query Layer
+│   ├── base.py                  #   Base query class (SQL builder, PIT subquery with NULL filtering)
+│   ├── price_query.py           #   Price queries (daily K / Level 1 Parquet / price matrix)
+│   ├── factor_query.py          #   Factor queries (wide-table first, PIT fallback to history)
+│   ├── screen.py                #   Stock screening (multi-factor scoring / quantile)
+│   ├── macro_query.py           #   Macro data queries (matrix / YoY / regime identification)
+│   ├── sentiment_query.py       #   Sentiment queries (stock sentiment / aggregation / screening)
+│   ├── alternative_query.py     #   Alternative data queries (time series / price correlation)
+│   ├── osint_query.py           #   OSINT (open-source intelligence) queries
+│   └── cache.py                 #   Query result cache (LRU)
+├── analytics/                   # Analytics Modules
+│   ├── macro_factor_link.py     #   Macro-factor correlation analysis
+│   ├── sentiment_factor.py      #   Sentiment factor construction & signal generation
+│   └── multi_source_analysis.py #   Multi-source fusion analysis (composite scoring)
+├── adapters/                    # Adapter Layer (Compatibility)
+│   ├── pandas_adapter.py        #   pandas DataFrame conversion & technical indicators
+│   ├── engine_adapter.py        #   Backtesting engine compatibility layer
+│   └── factor_calculator.py     #   Factor calculation engine
+├── osint/                       # Open-Source Intelligence
+│   ├── collectors/              #   Data collectors (AKShare / World Bank / RSS / gov.cn)
+│   ├── pipeline.py              #   Collection pipeline
+│   └── registry.py              #   Source registry
+├── utils/                       # Utilities
+│   ├── logger.py                #   Logging (colored output, file rotation)
+│   ├── config.py                #   Configuration (JSON / env vars)
+│   ├── validators.py            #   Data validation (price / factor / Level 1)
+│   └── code_utils.py            #   Stock code utilities
+├── scripts/                     # Import & Migration Scripts
+│   ├── import_phase1_ashare.py  #   Phase 1: A-share daily data import
+│   ├── import_phase2_level1.py  #   Phase 2: Level 1 data import
+│   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
+│   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
+│   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
+├── tests/                       # Test Suite (240 tests, all passing)
+├── benchmarks/                  # Performance Benchmarks
+├── docs/                        # Documentation
+└── cli.py                       # CLI Entry Point
 ```
 
-## 快速开始
+## Quick Start
 
-### 安装依赖
+### Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 初始化数据库
+### Initialize Database
 
 ```python
 from core.connection import DuckDBConnection
 from core.schema import SchemaManager
 
-conn = DuckDBConnection('market.db')
+conn = DuckDBConnection('factor_db.duckdb')
 schema = SchemaManager(conn)
-schema.init_database()  # 创建所有表和索引
+schema.init_database()  # Create all tables and indexes
 ```
 
-### 加载日 K 数据
+### Load Factor Data (Wide Table Architecture)
+
+```python
+from loaders.daily_loader import DailyLoader
+import pandas as pd
+
+loader = DailyLoader()
+
+# Load factor into wide table (auto-creates column if needed)
+df = pd.DataFrame({
+    'trade_date': ['2024-01-02', '2024-01-02'],
+    'stock_code': ['000001', '000002'],
+    'factor_value': [15.3, 22.1],
+})
+count = loader.load_factor_to_wide(df, factor_name='PE_ratio')
+print(f"Loaded {count} rows into factor_wide")
+```
+
+### Load Daily Price Data
 
 ```python
 from loaders.daily_loader import DailyLoader
 
 loader = DailyLoader()
 count = loader.load(Path('E:/Ashare_data/market_data'))
-print(f"加载完成: {count} 条记录")
+print(f"Loaded {count} records")
 ```
 
-### 加载 Level 1 数据
+### Convert Level 1 Feather → Parquet Partitions
 
 ```python
-from loaders.level1_loader import Level1Loader
+from loaders.level1_loader import Level1ParquetConverter
 
-loader = Level1Loader()
-count = loader.load(Path('E:/Level 1 Data'))
-print(f"加载完成: {count} 条记录")
+converter = Level1ParquetConverter()
+count = converter.convert_directory(
+    source_dir=Path('E:/Level 1 Data'),
+    output_dir=Path('data/level1_parquet')
+)
+print(f"Converted {count} files to Parquet partitions")
 ```
 
-### 查询价格数据
+### Query Price Data
 
 ```python
 from query.price_query import PriceQuery
 from datetime import date
 
-query = PriceQuery('market.db')
+query = PriceQuery('factor_db.duckdb')
 
-# 查询日 K
+# Daily K-line
 df = query.get_daily(
-    stock_codes=['000001.SZ', '600000.SH'],
+    stock_codes=['000001', '600000'],
     start_date=date(2024, 1, 1),
     end_date=date(2024, 12, 31)
 )
 
-# 获取价格矩阵（用于回测）
+# Price matrix for backtesting (NULL-safe PIT filtering)
 matrix = query.get_price_matrix(
     field='close',
     start_date=date(2024, 1, 1),
     end_date=date(2024, 12, 31),
-    adjust='forward'  # 前复权
+    adjust='forward'  # Forward-adjusted
 )
 ```
 
-### 查询因子数据
+### Query Level 1 Data (Parquet Partition Pruning)
+
+```python
+from query.price_query import PriceQuery
+from datetime import date, time
+
+query = PriceQuery(
+    'factor_db.duckdb',
+    level1_parquet_dir='data/level1_parquet'
+)
+
+df = query.get_level1(
+    stock_codes=['000001'],
+    trade_date=date(2023, 3, 30),
+    start_time=time(9, 30),
+    end_time=time(15, 0)
+)
+```
+
+### Query Factor Data (Wide Table First, PIT Fallback)
 
 ```python
 from query.factor_query import FactorQuery
+from datetime import date
 
-query = FactorQuery('market.db')
+query = FactorQuery('factor_db.duckdb')
 
-# 获取因子截面
-df = query.get_cross_section('PE', date(2024, 6, 30))
+# Cross-section (from wide table)
+df = query.get_cross_section('PE_ratio', date(2024, 6, 30))
 
-# 获取因子矩阵
-matrix = query.get_factor_matrix(['PE', 'PB', 'ROE'])
+# Factor matrix
+matrix = query.get_factor_matrix(['PE_ratio', 'PB_ratio', 'ROE'])
 
-# 计算 IC 序列
-ic_df = query.get_ic_series('PE', forward_return_days=1)
+# PIT query (falls back to factor_history)
+df = query.get_factor('PE_ratio', as_of=date(2024, 6, 30))
 ```
 
-### 条件选股
+### Stock Screening
 
 ```python
 from query.screen import StockScreener
+from datetime import date
 
-screener = StockScreener('market.db')
+screener = StockScreener('factor_db.duckdb')
 
-# 多因子打分
 result = screener.rank_by_factors(
     trade_date=date(2024, 6, 30),
-    factors={'PE': -1, 'ROE': 1, 'PB': -1},  # 方向: 1正向, -1负向
+    factors={'PE_ratio': -1, 'ROE': 1, 'PB_ratio': -1},  # 1=positive, -1=negative
     limit=50
 )
 ```
 
-### 宏观经济数据
-
-```python
-from loaders.macro_loader import MacroLoader
-from query.macro_query import MacroQuery
-
-# 加载宏观数据
-loader = MacroLoader('market.db')
-count = loader.load('macro_data.csv')
-
-# 查询宏观数据
-query = MacroQuery('market.db')
-df = query.get_macro_data(['GDP', 'CPI', 'M2'], date(2020, 1, 1), date(2024, 12, 31))
-
-# 获取宏观数据矩阵（日期 x 指标）
-matrix = query.get_macro_matrix(['GDP', 'CPI', 'M2'], date(2020, 1, 1), date(2024, 12, 31))
-
-# 计算同比
-yoy_df = query.calculate_yoy('CPI')
-
-# 识别宏观环境
-regime = query.identify_macro_regime(date(2020, 1, 1), date(2024, 12, 31))
-```
-
-### 舆情数据
-
-```python
-from loaders.news_loader import NewsLoader
-from query.sentiment_query import SentimentQuery
-
-# 加载舆情数据
-loader = NewsLoader('market.db')
-loader.load_news(news_df)
-loader.load_reports(report_df)
-
-# 查询舆情
-query = SentimentQuery('market.db')
-
-# 获取股票舆情
-df = query.get_stock_sentiment('000001.SZ', date(2024, 1, 1), date(2024, 12, 31))
-
-# 情感聚合
-agg = query.get_sentiment_aggregation(['000001.SZ', '600000.SH'], freq='W')
-
-# 根据情感选股
-stocks = query.get_sentiment_stocks('positive', date(2024, 6, 30), limit=50)
-```
-
-### 另类数据
-
-```python
-from loaders.alternative_loader import AlternativeLoader
-from query.alternative_query import AlternativeQuery
-
-# 加载另类数据
-loader = AlternativeLoader('market.db')
-count = loader.load(alternative_df)
-
-# 查询另类数据
-query = AlternativeQuery('market.db')
-df = query.get_data('satellite', date(2024, 1, 1), date(2024, 12, 31))
-
-# 与价格相关性分析
-corr = query.get_correlation_with_price('000001.SZ', 'satellite')
-```
-
-### 多源数据分析
-
-```python
-from analytics.macro_factor_link import MacroFactorLink
-from analytics.sentiment_factor import SentimentFactor
-from analytics.multi_source_analysis import MultiSourceAnalysis
-
-# 宏观-因子关联分析
-mfl = MacroFactorLink('market.db')
-corr = mfl.calculate_correlation('M2', 'PE')
-macro_factor = mfl.build_macro_factor(['M2', 'CPI', 'PMI'])
-
-# 舆情因子
-sf = SentimentFactor('market.db')
-sentiment_signal = sf.build_sentiment_factor(date(2024, 6, 30))
-
-# 多源融合分析
-msa = MultiSourceAnalysis('market.db')
-scores = msa.combine_score(date(2024, 6, 30), ['000001.SZ', '600000.SH'])
-screened = msa.multi_dimension_screen(date(2024, 6, 30), min_sentiment=0.3)
-```
-
-### 与回测引擎集成
+### Backtesting Engine Integration
 
 ```python
 from adapters.engine_adapter import FactorTradingAdapter
 
-adapter = FactorTradingAdapter('market.db')
+adapter = FactorTradingAdapter('factor_db.duckdb')
 
-# 兼容原有接口
 close_df = adapter.get_adj_price('close', adjust='forward')
 trade_dates = adapter.get_trade_dates('2024-01-01', '2024-12-31')
 stock_list = adapter.get_stock_list()
 ```
 
-## 性能基准
+## Architecture
 
-| 数据规模 | 查询类型 | DuckDB | pandas | 加速比 |
-|---------|---------|--------|--------|--------|
-| 252天 x 500股 | 聚合统计 | 3.8 ms | 6.0 ms | 1.6x |
-| 252天 x 500股 | 矩阵查询 | 8.4 ms | 12.7 ms | 1.5x |
-| 756天 x 1000股 | 聚合统计 | 6.5 ms | 32.7 ms | **5.0x** |
-| 756天 x 1000股 | 矩阵查询 | 14.8 ms | 59.3 ms | **4.0x** |
+### Wide Table Design (Solution A)
 
-数据规模越大，DuckDB 的向量化查询优势越明显。
+Traditional EAV long-table stores each factor as a row, leading to massive row counts and index memory bloat. The wide table design stores each factor as a column:
 
-## 运行测试
+```
+factor_wide (PK: trade_date, stock_code)
+├── trade_date      DATE
+├── stock_code      VARCHAR
+├── PE_ratio        DOUBLE
+├── PB_ratio        DOUBLE
+├── ROE             DOUBLE
+├── ...             (117+ factor columns)
+└── loaded_at       TIMESTAMP
+```
+
+**Performance**: Index memory reduced ~50x (PK from `(factor_code, trade_date, stock_code)` → `(trade_date, stock_code)`).
+
+### Dual-Track Storage
+
+| Table | Purpose | Data |
+|-------|---------|------|
+| `factor_wide` | Daily queries (latest version) | Upsert on `(trade_date, stock_code)` |
+| `factor_history` | PIT backtesting & audit | Append-only, all versions |
+| `factor_data` (view) | Backward compatibility | `UNPIVOT` of `factor_wide` |
+
+### Level 1 Parquet Partitioning
+
+```
+data/level1_parquet/
+├── trade_date=2014-01-02/data.parquet
+├── trade_date=2014-01-03/data.parquet
+├── ...
+└── trade_date=2023-03-30/data.parquet
+```
+
+DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions are scanned (partition pruning + Zonemap index).
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Application Layer                             │
+│         BacktestEngine / FactorPipeline / MultiSourceStrategy    │
+├─────────────────────────────────────────────────────────────────┤
+│                    Adapter Layer (adapters/)                      │
+│    pandas_adapter / engine_adapter / factor_calculator           │
+├─────────────────────────────────────────────────────────────────┤
+│                    Query Layer (query/)                           │
+│    price_query / factor_query / screen / macro_query             │
+│    sentiment_query / alternative_query / osint_query             │
+├─────────────────────────────────────────────────────────────────┤
+│                    Analytics Layer (analytics/)                   │
+│    macro_factor_link / sentiment_factor / multi_source_analysis │
+├─────────────────────────────────────────────────────────────────┤
+│                    Core Layer (core/)                             │
+│    connection / schema / metadata_manager                        │
+├─────────────────────────────────────────────────────────────────┤
+│                    Loader Layer (loaders/)                        │
+│    daily_loader / level1_loader / csmar_loader                   │
+│    macro_loader / news_loader / alternative_loader               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Database Schema
+
+### Core Tables
+
+| Table | Purpose | Primary Key |
+|-------|---------|-------------|
+| `daily_prices` | Daily OHLCV data | (trade_date, stock_code) |
+| `factor_wide` | Factor data (wide format) | (trade_date, stock_code) |
+| `factor_history` | Factor history (all versions, PIT) | (trade_date, stock_code, factor_name, loaded_at) |
+| `factor_data` | Backward-compatible view (UNPIVOT) | — |
+| `stock_info` | Stock metadata | stock_code |
+| `trade_calendar` | Trading calendar | trade_date |
+
+### Level 1 Data
+
+| Storage | Purpose |
+|---------|---------|
+| `data/level1_parquet/` | Hive-partitioned Parquet files (2,250 days × 7,337 stocks = 2.1B rows) |
+
+### Extension Tables
+
+| Table | Purpose |
+|-------|---------|
+| `macro_data` / `macro_indicators` | Macro economic data |
+| `news_sentiment` / `report_sentiment` | Sentiment data |
+| `alternative_data` / `alternative_types` | Alternative data |
+| `data_categories` / `data_sources` / `data_dictionary` | Metadata |
+
+## Performance Benchmarks
+
+| Data Scale | Query Type | DuckDB | pandas | Speedup |
+|-----------|-----------|--------|--------|---------|
+| 252 days × 500 stocks | Aggregation | 3.8 ms | 6.0 ms | 1.6x |
+| 252 days × 500 stocks | Matrix query | 8.4 ms | 12.7 ms | 1.5x |
+| 756 days × 1000 stocks | Aggregation | 6.5 ms | 32.7 ms | **5.0x** |
+| 756 days × 1000 stocks | Matrix query | 14.8 ms | 59.3 ms | **4.0x** |
+| Level 1: 2.1B rows, single day | Parquet scan | 0.9 s | — | — |
+| Level 1: 2.1B rows, single stock | Partition pruning | 0.05 s | — | — |
+
+## Testing
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-当前测试覆盖:
-- 连接管理（单例、读写分离、上下文管理器、线程安全）
-- 表结构管理（创建表、索引、统计信息）
-- 价格查询（日 K、Level 1、价格矩阵、日期范围）
-- 因子查询（因子数据、截面、矩阵、IC 计算）
-- 条件选股（筛选、分位数、多因子打分）
-- 适配器（pandas 转换、引擎兼容、DataLoaderV3 格式）
-- 元数据管理（分类、数据源、数据字典）
-- 宏观数据（加载、查询、矩阵、同比、统计、宏观环境）
-- 舆情数据（加载、查询、聚合、情感选股）
-- 另类数据（加载、查询、时间序列、相关性）
-- 分析模块（宏观-因子关联、舆情因子、多源融合）
+**240 tests, all passing.** Coverage includes:
 
-## 架构设计
+| Test Suite | Tests | What's Covered |
+|-----------|-------|----------------|
+| `test_connection.py` | — | Connection pool (singleton, read/write split, thread-safe) |
+| `test_schema.py` | — | Schema management (tables, indexes, wide table creation) |
+| `test_wide_loader.py` | 9 | Wide table loading (Upsert, dual-write, NaN handling) |
+| `test_wide_query.py` | 10 | Wide table queries (cross-section, matrix, PIT fallback) |
+| `test_migration.py` | 6 | Data migration (factor_data → factor_wide + factor_history) |
+| `test_level1_parquet.py` | 12 | Feather→Parquet conversion, partition pruning, PriceQuery adapter |
+| `test_pit_null_filter.py` | 5 | PIT NULL filtering (root cause fix for all-NaN price matrix) |
+| `test_query.py` | — | Price/factor queries, stock screening |
+| `test_daily_loader.py` | — | Daily data loading |
+| `test_adapters.py` | — | pandas adapter, engine compatibility |
+| `test_extension.py` | — | Macro/news/alternative data loading & query |
+| `test_osint.py` | — | OSINT collectors & pipeline |
+| `test_cache.py` | — | Query cache (LRU) |
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    应用层 (用户代码)                             │
-│         BacktestEngine / FactorPipeline / MultiSourceStrategy    │
-├─────────────────────────────────────────────────────────────────┤
-│                    适配器层 (adapters)                            │
-│    pandas_adapter / engine_adapter / analysis_adapter           │
-├─────────────────────────────────────────────────────────────────┤
-│                    查询层 (query)                                 │
-│    price_query / factor_query / screen                           │
-│    macro_query / sentiment_query / alternative_query             │
-├─────────────────────────────────────────────────────────────────┤
-│                    分析层 (analytics)                             │
-│    macro_factor_link / sentiment_factor / multi_source_analysis │
-├─────────────────────────────────────────────────────────────────┤
-│                    核心层 (core)                                  │
-│    connection / schema / metadata_manager                        │
-├─────────────────────────────────────────────────────────────────┤
-│                    加载层 (loaders)                               │
-│    level1_loader / daily_loader / factor_loader                 │
-│    macro_loader / news_loader / alternative_loader               │
-└─────────────────────────────────────────────────────────────────┘
-```
+## Documentation
 
-## 数据库表结构
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — Architecture design
+- [LOCAL_DATA_STORAGE_ANALYSIS.md](docs/LOCAL_DATA_STORAGE_ANALYSIS.md) — Local storage deep-dive
+- [LEVEL1_DUCKDB_ANALYSIS.md](docs/LEVEL1_DUCKDB_ANALYSIS.md) — Level 1 data feasibility analysis
+- [FUTURE_EXTENSION_PLAN.md](docs/FUTURE_EXTENSION_PLAN.md) — Extension roadmap (macro/sentiment/alternative)
+- [IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md) — PIT query & performance improvement plan
 
-### 核心数据表
-
-| 表名 | 用途 | 主键 |
-|------|------|------|
-| `daily_prices` | 日 K 数据 | (trade_date, stock_code) |
-| `level1_snapshots` | Level 1 分钟数据 | (trade_date, trade_time, stock_code) |
-| `stock_info` | 股票基本信息 | stock_code |
-| `trade_calendar` | 交易日历 | trade_date |
-| `factor_data` | 因子数据 | (trade_date, stock_code, factor_name) |
-| `factor_info` | 因子元数据 | factor_name |
-
-### 扩展数据表
-
-| 表名 | 用途 | 主键 |
-|------|------|------|
-| `data_categories` | 数据分类（宏观/舆情/另类） | category_id |
-| `data_sources` | 数据源信息 | source_id |
-| `data_dictionary` | 数据字典（字段说明） | field_id |
-| `macro_data` | 宏观经济数据 | (trade_date, indicator_id, value_type) |
-| `macro_indicators` | 宏观指标信息 | indicator_id |
-| `news_sentiment` | 新闻舆情数据 | news_id |
-| `report_sentiment` | 研报舆情数据 | report_id |
-| `alternative_data` | 另类数据 | data_id |
-| `alternative_types` | 另类数据类型 | data_type |
-
-## 文档
-
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - 架构设计文档
-- [LOCAL_DATA_STORAGE_ANALYSIS.md](docs/LOCAL_DATA_STORAGE_ANALYSIS.md) - 本地数据存储方案深度分析
-- [LEVEL1_DUCKDB_ANALYSIS.md](docs/LEVEL1_DUCKDB_ANALYSIS.md) - Level 1 行情数据 DuckDB 支持性分析
-- [FUTURE_EXTENSION_PLAN.md](docs/FUTURE_EXTENSION_PLAN.md) - 宏观/舆情/另类数据扩展方案
-
-## 依赖
+## Dependencies
 
 - duckdb >= 0.10.0
 - pandas >= 2.0.0
 - numpy >= 1.24.0
 - pyarrow >= 15.0.0
 - pytest >= 8.0.0
+
+## Data Sources
+
+| Source | Data | Volume |
+|--------|------|--------|
+| CSMAR (国泰安) | 117 financial factors | 871M rows |
+| A-share market data | Daily OHLCV | 43M rows |
+| Level 1 tick data | Minute-level snapshots | 2.1B rows (32GB Parquet) |
 
 ## License
 
