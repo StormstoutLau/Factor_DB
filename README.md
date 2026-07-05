@@ -2,6 +2,8 @@
 
 A high-performance quantitative financial data storage system built on **DuckDB**, designed for the China A-share market.
 
+[中文文档](README_zh.md)
+
 ## Key Features
 
 - **High Performance**: Vectorized query engine, 2-5x faster than pandas (advantage grows with data scale)
