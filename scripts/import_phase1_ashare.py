@@ -424,15 +424,11 @@ def import_special_factors(db_path: str) -> dict[str, int]:
         df_barra = pd.DataFrame(records)
         logger.info(f"  barra_tl 展开: {len(df_barra):,} 条记录")
 
-        # 使用 conn_mgr（已配置 memory_limit）直接 INSERT
-        with conn_mgr as conn:
-            conn.register('_temp_barra', df_barra)
-            conn.execute('''
-                INSERT INTO factor_data (trade_date, stock_code, factor_name, factor_value)
-                SELECT trade_date, stock_code, factor_name, factor_value
-                FROM _temp_barra
-            ''')
-            conn.unregister('_temp_barra')
+        # 按因子分组，统一走双写路径 (factor_wide + factor_history)
+        for factor_name, group in df_barra.groupby('factor_name'):
+            loader.write_factor_long(
+                group[['trade_date', 'stock_code', 'factor_value']], factor_name
+            )
         results['barra_tl'] = len(df_barra)
         logger.info(f"  barra_tl: {len(df_barra):,} 条")
 

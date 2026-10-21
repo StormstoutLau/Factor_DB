@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from .base import BaseLoader, LoaderConfig
 from Factor_DB.utils.code_utils import normalize_stock_code
-from Factor_DB.utils.sql_utils import quote_identifier, validate_identifier
+from Factor_DB.utils.sql_utils import validate_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class DailyLoader(BaseLoader):
                 # Step 1: UNPIVOT 到临时表
                 conn.execute('''
                     CREATE TEMP TABLE _long AS
-                    SELECT trade_date, stock_code, CAST(value AS DOUBLE) AS val
+                    SELECT trade_date, stock_code, CAST(value AS DOUBLE) AS factor_value
                     FROM (
                         UNPIVOT _wide
                         ON COLUMNS(* EXCLUDE trade_date)
@@ -230,17 +230,13 @@ class DailyLoader(BaseLoader):
                     validate_identifier(field_name, '价格字段')
                     conn.execute(f'''
                         INSERT INTO daily_prices (trade_date, stock_code, {field_name})
-                        SELECT trade_date, stock_code, val AS {field_name}
+                        SELECT trade_date, stock_code, factor_value AS {field_name}
                         FROM _long
                     ''')
                 else:
-                    # 因子名作为值使用命名参数绑定
+                    # 因子数据统一双写 factor_history + factor_wide
                     validate_identifier(field_name, '因子名')
-                    conn.execute('''
-                        INSERT INTO factor_data (trade_date, stock_code, factor_name, factor_value)
-                        SELECT trade_date, stock_code, $factor_name AS factor_name, val AS factor_value
-                        FROM _long
-                    ''', {'factor_name': field_name})
+                    self._write_factor_from_temp(conn, '_long', field_name)
 
                 conn.execute('DROP TABLE IF EXISTS _long')
                 conn.unregister('_wide')
@@ -282,39 +278,6 @@ class DailyLoader(BaseLoader):
 
         except Exception as e:
             logger.error(f"导入日 K 表失败: {e}")
-            return 0
-
-    def _import_to_factor_table(self, df: pd.DataFrame, factor_name: str) -> int:
-        """导入到因子表
-
-        Args:
-            df: 长格式 DataFrame
-            factor_name: 因子名
-
-        Returns:
-            导入记录数
-        """
-        try:
-            # 重命名列为标准格式
-            df = df.rename(columns={factor_name: 'factor_value'})
-            df['factor_name'] = factor_name
-
-            with self.conn as conn:
-                conn.register('temp_factor', df)
-
-                conn.execute('''
-                    INSERT INTO factor_data 
-                    (trade_date, stock_code, factor_name, factor_value)
-                    SELECT trade_date, stock_code, factor_name, factor_value
-                    FROM temp_factor
-                ''')
-
-                conn.unregister('temp_factor')
-
-            return len(df)
-
-        except Exception as e:
-            logger.error(f"导入因子表失败: {e}")
             return 0
 
     def validate(self, data: pd.DataFrame) -> bool:
@@ -456,17 +419,6 @@ class DailyLoader(BaseLoader):
         logger.info(f"加载因子 {factor_name} → factor_wide + factor_history")
 
         try:
-            from Factor_DB.core.schema import SchemaManager
-            schema = SchemaManager(self.conn)
-
-            if not schema.table_exists('factor_wide'):
-                schema.create_factor_wide([factor_name])
-            elif factor_name not in schema.get_factor_columns('factor_wide'):
-                schema.add_factor_column('factor_wide', factor_name)
-
-            if not schema.table_exists('factor_history'):
-                schema.create_factor_history()
-
             work_df = df.copy()
 
             if isinstance(work_df.index, pd.DatetimeIndex):
@@ -481,8 +433,6 @@ class DailyLoader(BaseLoader):
             code_cols = [c for c in work_df.columns if c != 'trade_date']
             rename_map = {c: normalize_stock_code(c) for c in code_cols}
             work_df = work_df.rename(columns=rename_map)
-
-            factor_col = quote_identifier(factor_name)
 
             with self.conn as conn:
                 self._apply_settings(conn)
@@ -505,23 +455,8 @@ class DailyLoader(BaseLoader):
                 ''')
 
                 hist_count = conn.execute('SELECT COUNT(*) FROM _long_tmp').fetchone()[0]
-                conn.execute('''
-                    INSERT INTO factor_history (trade_date, stock_code, factor_name, factor_value)
-                    SELECT trade_date, stock_code, $factor_name AS factor_name, factor_value
-                    FROM _long_tmp
-                ''', {'factor_name': factor_name})
+                wide_count = self._write_factor_from_temp(conn, '_long_tmp', factor_name)
                 logger.debug(f"factor_history 写入 {hist_count} 行")
-
-                conn.execute(f'''
-                    INSERT INTO factor_wide (trade_date, stock_code, {factor_col}, loaded_at)
-                    SELECT trade_date, stock_code, factor_value, CURRENT_TIMESTAMP AS loaded_at
-                    FROM _long_tmp
-                    ON CONFLICT (trade_date, stock_code) DO UPDATE SET
-                        {factor_col} = EXCLUDED.{factor_col},
-                        loaded_at = EXCLUDED.loaded_at
-                ''')
-
-                wide_count = conn.execute('SELECT COUNT(*) FROM factor_wide').fetchone()[0]
 
                 conn.execute('DROP TABLE IF EXISTS _long_tmp')
                 conn.unregister('_wide_tmp')

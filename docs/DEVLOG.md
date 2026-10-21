@@ -7,6 +7,19 @@
 
 ## 2026-10（最近）
 
+### 因子写路径统一（迁移前置，ADR-0004）
+- **背景**: 迁移后 `factor_data` 变为视图（不可写），daily/csmar/phase1 三条写路径会失效；`factor_wide` 已存在时 `create_factor_wide` 的 `IF NOT EXISTS` 不补列
+- **spec 流程**: [调研](research/factor_write_path_research.md)（C1–C8 代码实证 + E1/E2 DuckDB 探针） → [设计](design/factor_write_path_design.md)（D1–D9、I1–I5） → [实施](implementation/factor_write_path_implementation.md) → checklist → TDD
+- **实证**: `INSERT INTO view` 报 `CatalogException`；`UNPIVOT COLUMNS(* EXCLUDE ...)` 视图在 `ADD COLUMN` 后自动包含新列（静态 `UNION ALL` 视图不会）
+- **实现**:
+  - `SchemaManager.object_type()` 公有化；迁移 Step 2 后补齐 `factor_wide` 缺失列
+  - `BaseLoader.write_factor_long()` / `_write_factor_from_temp()` / `_ensure_factor_tables()`：单事务双写 `factor_history` + `factor_wide`（`ON CONFLICT` 更新），`factor_data` 仍为实体表时附加 legacy 写入
+  - `DailyLoader` 因子分支改走统一写路径，`load_factor_to_wide` 复用同一事务，删除死代码 `_import_to_factor_table`
+  - `CSMARLoader` 财务/市场因子改走统一写路径（按主键去重），失败改为抛异常
+  - Phase 1 barra 脚本按 `factor_name` 分组调用 `write_factor_long`
+  - 兼容视图改为动态 `UNPIVOT COLUMNS(* EXCLUDE (trade_date, stock_code, loaded_at))`
+- **测试**: 新增 `test_factor_write_path.py` 10 个；定向 59 passed；全量 **276 passed**
+
 ### 双轨迁移安全化（P0，ADR-0008）
 - **背景**: Claude 代码评审 CRITICAL——单因子失败被吞后仍无条件 `DROP TABLE factor_data`，会丢数据
 - **落档**: [评审核实分析](reviews/2026-10-claude-audit-analysis.md)

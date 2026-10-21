@@ -106,3 +106,31 @@
 - [x] 其余辅助脚本路径环境变量化（`ZHUYI_DATA_PATH` / `LEVEL1_DATA_PATH` / `CSMAR_DATA_PATH` / `LEVEL1_PARQUET_DIR`）
 - [x] 定向测试与全量回归通过（266 passed）
 - [x] DEVLOG / 评审分析文档 / checklist 同步
+
+---
+
+## 六、本次任务：因子写路径统一（迁移前置）
+
+来源：迁移阻塞项分析 · 文档：[调研](../research/factor_write_path_research.md) / [设计](../design/factor_write_path_design.md) / [实施](../implementation/factor_write_path_implementation.md)
+
+### 调研与设计
+- [x] 实证 DuckDB 1.5.3 视图不可写（`CatalogException`）
+- [x] 全量列出仍写 `factor_data` 的生产路径（daily/csmar/phase1）
+- [x] 确认 `load_factor_to_wide` 无生产调用方、`_import_to_factor_table` 为死代码
+- [x] 确认 `create_factor_wide` 的 `IF NOT EXISTS` 不补列风险
+- [x] 设计明确事务边界、legacy 写入判定与迁移补列
+
+### TDD
+- [x] 红测试：迁移前三表写入 / 迁移后写入 / OHLCV 不变 / CSMAR / 迁移补列（红灯 9 failed / 1 passed）
+- [x] `SchemaManager.object_type()` 公有方法
+- [x] `BaseLoader.write_factor_long()` + `_write_factor_from_temp()`
+- [x] `DailyLoader` 双写切换 + 删除死代码
+- [x] `CSMARLoader` 双写切换
+- [x] Phase 1 barra 脚本切换
+- [x] 迁移补齐已有宽表缺失列
+- [x] 定向 + 全量回归通过（定向 59 passed；全量 **276 passed**）
+- [x] DEVLOG / ADR-0004 / checklist 同步
+
+### 静态验收
+- [x] `INSERT INTO factor_data` 仅出现在 `BaseLoader._write_factor_from_temp` 的 legacy 分支（生产代码）
+- [x] `_import_to_factor_table` 已删除

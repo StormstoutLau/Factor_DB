@@ -303,19 +303,19 @@ class CSMARLoader(BaseLoader):
             # 转换为数值
             sub_df['factor_value'] = pd.to_numeric(sub_df['factor_value'], errors='coerce')
             sub_df = sub_df.dropna(subset=['factor_value'])
+            # 宽表主键为 (trade_date, stock_code)，同键保留最后一条
+            sub_df = sub_df.drop_duplicates(subset=['trade_date', 'stock_code'], keep='last')
 
             if sub_df.empty:
                 continue
 
             try:
                 with self.conn as conn:
-                    conn.register('temp_csmar', sub_df[['trade_date', 'stock_code', 'factor_name', 'factor_value']])
-                    conn.execute('''
-                        INSERT INTO factor_data (trade_date, stock_code, factor_name, factor_value)
-                        SELECT trade_date, stock_code, factor_name, factor_value
-                        FROM temp_csmar
-                    ''')
-                    conn.unregister('temp_csmar')
+                    conn.register('_csmar_tmp', sub_df[['trade_date', 'stock_code', 'factor_value']])
+                    try:
+                        self._write_factor_from_temp(conn, '_csmar_tmp', full_factor_name)
+                    finally:
+                        conn.unregister('_csmar_tmp')
 
                 count = len(sub_df)
                 total += count
@@ -323,6 +323,7 @@ class CSMARLoader(BaseLoader):
 
             except Exception as e:
                 logger.error(f"导入因子失败 {full_factor_name}: {e}")
+                raise
 
         return total
 
@@ -357,19 +358,19 @@ class CSMARLoader(BaseLoader):
             sub_df['factor_name'] = f"{factor_name}_{val_col}" if len(value_cols) > 1 else factor_name
             sub_df['factor_value'] = pd.to_numeric(sub_df['factor_value'], errors='coerce')
             sub_df = sub_df.dropna(subset=['factor_value'])
+            # 市场因子 stock_code 固定为 MARKET，按日期去重
+            sub_df = sub_df.drop_duplicates(subset=['trade_date'], keep='last')
 
             if sub_df.empty:
                 continue
 
             try:
                 with self.conn as conn:
-                    conn.register('temp_mkt', sub_df[['trade_date', 'stock_code', 'factor_name', 'factor_value']])
-                    conn.execute('''
-                        INSERT INTO factor_data (trade_date, stock_code, factor_name, factor_value)
-                        SELECT trade_date, stock_code, factor_name, factor_value
-                        FROM temp_mkt
-                    ''')
-                    conn.unregister('temp_mkt')
+                    conn.register('_csmar_mkt_tmp', sub_df[['trade_date', 'stock_code', 'factor_value']])
+                    try:
+                        self._write_factor_from_temp(conn, '_csmar_mkt_tmp', sub_df['factor_name'].iloc[0])
+                    finally:
+                        conn.unregister('_csmar_mkt_tmp')
 
                 count = len(sub_df)
                 total += count
@@ -377,6 +378,7 @@ class CSMARLoader(BaseLoader):
 
             except Exception as e:
                 logger.error(f"导入市场因子失败 {val_col}: {e}")
+                raise
 
         return total
 

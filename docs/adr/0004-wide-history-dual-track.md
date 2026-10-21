@@ -26,6 +26,8 @@ EAV 长表（ADR-0002）在 241 个因子、16.8 亿行规模下暴露致命问�
 ## 后果
 - ✅ 日常查询性能提升 5-20x（zonemap + 物理排序）
 - ✅ 32GB 机器可行
-- ⚠️ 双写逻辑复杂度增加
+- ✅ 双写已收敛到 `BaseLoader.write_factor_long()`（`factor_history` + `factor_wide` 单事务）；`factor_data` 为实体表时附加 legacy 写入，迁移后自动跳过
+- ✅ 兼容视图为动态 `UNPIVOT COLUMNS(* EXCLUDE ...)`，迁移后新增因子列无需重建视图
+- ✅ 迁移自动补齐已有 `factor_wide` 的缺失因子列
 - ⚠️ 迁移需在更大 RAM 机器执行（当前 32GB 机器 PRIMARY KEY 重建仍 OOM）
 - ⚠️ 代码已实现并通过测试，但**生产库尚未执行迁移**（factor_wide/factor_history 表未创建）

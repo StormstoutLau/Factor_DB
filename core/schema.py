@@ -952,6 +952,15 @@ class SchemaManager:
         logger.info("创建 factor_wide 宽表...")
         self.create_factor_wide(all_factors)
 
+        # 迁移前可能已通过双写创建了部分宽表：补齐缺失因子列
+        existing_cols = set(self.get_factor_columns('factor_wide'))
+        missing_cols = [f for f in all_factors if f not in existing_cols]
+        if missing_cols:
+            logger.info(f"补齐 factor_wide 缺失列: {len(missing_cols)} 个")
+            for name in missing_cols:
+                if not self.add_factor_column('factor_wide', name):
+                    raise MigrationError(f"补齐 factor_wide 列失败: {name}")
+
         # Step 3: 创建历史表（如果不存在）
         if not self.table_exists('factor_history'):
             self.create_factor_history()
@@ -1165,20 +1174,17 @@ class SchemaManager:
                 if not factor_list:
                     raise MigrationError("factor_wide 无因子列，无法创建视图")
 
-                union_parts = []
-                for f in factor_list:
-                    # CREATE VIEW 属于 DDL，不支持预处理参数：
-                    # 因子名先白名单校验，再按字面量/标识符规则转义
-                    validate_identifier(f, '因子名')
-                    union_parts.append(
-                        f"SELECT trade_date, stock_code, {escape_literal(f)} AS factor_name, "
-                        f"{quote_identifier(f)} AS factor_value, loaded_at "
-                        f"FROM factor_wide WHERE {quote_identifier(f)} IS NOT NULL"
-                    )
-                union_sql = '\n    UNION ALL\n    '.join(union_parts)
-                view_sql = f'''
+                # 动态视图：COLUMNS(*) 在每次查询时重新绑定，
+                # 迁移后新增因子列会自动出现在 factor_data 视图中
+                view_sql = '''
                     CREATE VIEW factor_data AS
-                    {union_sql}
+                    SELECT trade_date, stock_code, factor_name, factor_value, loaded_at
+                    FROM factor_wide
+                    UNPIVOT (
+                        factor_value FOR factor_name IN (
+                            COLUMNS(* EXCLUDE (trade_date, stock_code, loaded_at))
+                        )
+                    )
                     ORDER BY factor_name, trade_date, stock_code
                 '''
 
@@ -1239,6 +1245,22 @@ class SchemaManager:
             [table_name],
         ).fetchone()
         return row[0] if row else None
+
+    def object_type(self, table_name: str) -> Optional[str]:
+        """查询数据库对象类型
+
+        Args:
+            table_name: 对象名
+
+        Returns:
+            'BASE TABLE'、'VIEW' 或 None（不存在）
+        """
+        validate_identifier(table_name, '表名')
+        try:
+            with self.conn as conn:
+                return self._table_type(conn, table_name)
+        except Exception:
+            return None
 
     def _is_view(self, table_name: str) -> bool:
         """判断对象是否为视图（不存在或异常时返回 False）"""
