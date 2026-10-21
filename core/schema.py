@@ -14,11 +14,16 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from .connection import DuckDBConnection
 
 logger = logging.getLogger(__name__)
+
+
+class MigrationError(RuntimeError):
+    """因子迁移失败（迁移中止，源表 factor_data 保持不变）"""
 
 
 class SchemaManager:
@@ -839,27 +844,51 @@ class SchemaManager:
             logger.error(f"UNPIVOT 失败 {wide_table} → {long_table}: {e}")
             return 0
 
+    def _configure_migration(self, conn) -> None:
+        """设置迁移专用资源参数（内存安全）
+
+        依据：docs/design/wide_migration_design.md §2.3
+        - memory_limit=24GB（75% 物理内存，留 8GB 给 OS）
+        - threads=4（减少并发内存碎片化）
+        - preserve_insertion_order=false（官方缓解 OOM 建议）
+
+        Args:
+            conn: 底层 duckdb 连接（由 with self.conn as conn 提供）
+        """
+        try:
+            conn.execute("SET memory_limit='24GB'")
+            conn.execute("SET threads=4")
+            conn.execute("SET preserve_insertion_order=false")
+        except Exception as e:
+            logger.error(f"迁移资源参数设置失败，中止迁移: {e}")
+            raise MigrationError(f"迁移资源配置失败: {e}") from e
+
     def migrate_factor_data_to_wide(self, batch_size: int = 5) -> dict:
         """将 factor_data 长表迁移到双轨存储（factor_wide + factor_history）
 
-        策略：
-        1. 创建 factor_wide（宽表）和 factor_history（历史长表）
-        2. 分因子批量迁移（避免内存溢出）
-        3. 将 factor_data 替换为视图（UNPIVOT wide → long），保持向后兼容
-
-        迁移完成后：
-        - factor_wide: 最新版本因子数据，主键 (trade_date, stock_code)
-        - factor_history: 所有历史版本，支持 PIT 查询
-        - factor_data: 替换为视图，UNPIVOT factor_wide 的结果
+        安全语义（见 docs/design/migration_safety_design.md）：
+        - 任一因子失败 → 中止，源表 factor_data 保持不变（不 RENAME、不 DROP）
+        - 每因子宽表+历史表在同一事务内提交，并做行数对账
+        - 全部成功后，原表 RENAME 为 factor_data_backup_<ts>，再创建兼容视图
+        - 已迁移（factor_data 为视图）时直接短路，保证重跑幂等
 
         Args:
             batch_size: 每批处理的因子数量（默认 5）
 
         Returns:
-            迁移统计 {factor_name: 行数}
+            迁移统计 {factor_name: 行数}；已迁移时返回空 dict
+
+        Raises:
+            MigrationError: 任一因子迁移失败或视图替换失败（源表不会被删除）
         """
+        stats: dict[str, int] = {}
+
+        # Step 0: 幂等短路——factor_data 已是视图说明迁移已完成
+        if self._is_view('factor_data'):
+            logger.info("factor_data 已是视图，迁移已完成，跳过")
+            return stats
+
         logger.info("开始因子数据迁移...")
-        stats = {}
 
         # Step 1: 获取所有因子列表
         with self.conn as conn:
@@ -879,17 +908,29 @@ class SchemaManager:
             self.create_factor_history()
             logger.info("创建 factor_history 历史表完成")
 
-        # Step 4: 分因子批量迁移
+        # Step 4: 分因子批量迁移（fail-fast：任一失败立即中止）
+        failures: dict[str, str] = {}
         for i in range(0, len(all_factors), batch_size):
             batch = all_factors[i:i + batch_size]
             logger.info(f"迁移批次 {i // batch_size + 1}: {batch}")
 
             for factor in batch:
-                count = self._migrate_single_factor(factor)
-                stats[factor] = count
+                try:
+                    stats[factor] = self._migrate_single_factor(factor)
+                except MigrationError as e:
+                    failures[factor] = str(e)
+                    logger.error(f"迁移中止：因子 {factor} 失败: {e}")
+                    break
+            if failures:
+                break
 
-        # Step 5: 将 factor_data 替换为视图
-        logger.info("将 factor_data 替换为视图...")
+        if failures:
+            raise MigrationError(
+                f"迁移中止：{len(failures)} 个因子失败，源表 factor_data 未改动。"
+                f"失败明细: {failures}"
+            )
+
+        # Step 5: 仅在全部成功后替换为视图（RENAME 备份 + 单事务）
         self._replace_factor_data_with_view()
 
         wide_count = self._get_row_count('factor_wide')
@@ -898,45 +939,86 @@ class SchemaManager:
         return stats
 
     def _migrate_single_factor(self, factor_name: str) -> int:
-        """迁移单个因子到宽表和历史表
+        """迁移单个因子到宽表和历史表（事务化 + 行数对账）
+
+        安全语义：
+        - 宽表 upsert 与历史表插入在同一事务内，任一失败整体回滚
+        - 事务内校验：宽表非空值数 == 源 distinct 键数；历史行数 == 源非空行数
+        - 历史表已有该因子完整数据时只补宽表，不重复写历史（重试幂等）
+        - 失败抛 MigrationError（不再静默返回 0）
 
         Args:
             factor_name: 因子名
 
         Returns:
-            迁移的行数
+            宽表该因子的非空行数；全空因子返回 0
+
+        Raises:
+            MigrationError: 迁移失败或行数对账不一致
         """
         try:
             with self.conn as conn:
-                # 宽表 Upsert：每个 (trade_date, stock_code) 取最新版本
-                # 使用 INSERT ... ON CONFLICT DO UPDATE 处理重复主键
+                self._configure_migration(conn)
+
+                src_rows = conn.execute(
+                    f"SELECT COUNT(*) FROM factor_data "
+                    f"WHERE factor_name = '{factor_name}' AND factor_value IS NOT NULL"
+                ).fetchone()[0]
+                if src_rows == 0:
+                    logger.info(f"  因子 {factor_name}: 无非空数据，跳过")
+                    return 0
+
+                src_keys = conn.execute(f'''
+                    SELECT COUNT(*) FROM (
+                        SELECT DISTINCT trade_date, stock_code
+                        FROM factor_data
+                        WHERE factor_name = '{factor_name}' AND factor_value IS NOT NULL
+                    ) t
+                ''').fetchone()[0]
+
+                hist_existing = conn.execute(
+                    f"SELECT COUNT(*) FROM factor_history WHERE factor_name = '{factor_name}'"
+                ).fetchone()[0]
+
+                # 宽表 Upsert：arg_max 取 loaded_at 最新版本（内存安全，见设计文档 §2.2）
                 wide_sql = f'''
                     INSERT INTO factor_wide (trade_date, stock_code, loaded_at, "{factor_name}")
                     SELECT
                         trade_date,
                         stock_code,
-                        COALESCE(loaded_at, CURRENT_TIMESTAMP) AS loaded_at,
-                        factor_value
-                    FROM (
-                        SELECT *,
-                               ROW_NUMBER() OVER (
-                                   PARTITION BY trade_date, stock_code
-                                   ORDER BY loaded_at DESC NULLS LAST
-                               ) AS rn
-                        FROM factor_data
-                        WHERE factor_name = '{factor_name}'
-                          AND factor_value IS NOT NULL
-                    ) sub
-                    WHERE rn = 1
+                        COALESCE(max(loaded_at), CURRENT_TIMESTAMP) AS loaded_at,
+                        arg_max(factor_value, COALESCE(loaded_at, CURRENT_TIMESTAMP)) AS factor_value
+                    FROM factor_data
+                    WHERE factor_name = '{factor_name}'
+                      AND factor_value IS NOT NULL
+                    GROUP BY trade_date, stock_code
                     ON CONFLICT (trade_date, stock_code)
                     DO UPDATE SET
                         "{factor_name}" = EXCLUDED."{factor_name}",
                         loaded_at = EXCLUDED.loaded_at
                 '''
-                conn.execute(wide_sql)
-                wide_count = conn.execute(
-                    f'SELECT COUNT(*) FROM factor_wide WHERE "{factor_name}" IS NOT NULL'
-                ).fetchone()[0]
+
+                # 重试/直接重入：历史已存在 → 只补宽表，不重复追加历史
+                if hist_existing > 0:
+                    if hist_existing < src_rows:
+                        raise MigrationError(
+                            f"因子 {factor_name} 历史表数据不完整"
+                            f"（{hist_existing} < 源 {src_rows}），需人工介入"
+                        )
+                    conn.execute(wide_sql)
+                    wide_count = conn.execute(
+                        f'SELECT COUNT(*) FROM factor_wide WHERE "{factor_name}" IS NOT NULL'
+                    ).fetchone()[0]
+                    if wide_count < src_keys:
+                        raise MigrationError(
+                            f"因子 {factor_name} 宽表行数不足"
+                            f"（{wide_count} < 源键数 {src_keys}）"
+                        )
+                    logger.info(
+                        f"  因子 {factor_name}: 历史已存在（{hist_existing} 行），"
+                        f"宽表校验 {wide_count}/{src_keys}"
+                    )
+                    return wide_count
 
                 # 历史表：保留所有版本
                 hist_sql = f'''
@@ -951,19 +1033,71 @@ class SchemaManager:
                     WHERE factor_name = '{factor_name}'
                       AND factor_value IS NOT NULL
                 '''
-                conn.execute(hist_sql)
 
-            logger.info(f"  因子 {factor_name}: {wide_count:,} 行 → wide + history")
+                # 单因子事务：wide + history 原子提交，失败整体回滚
+                conn.execute("BEGIN TRANSACTION")
+                try:
+                    conn.execute(wide_sql)
+                    wide_count = conn.execute(
+                        f'SELECT COUNT(*) FROM factor_wide WHERE "{factor_name}" IS NOT NULL'
+                    ).fetchone()[0]
+                    if wide_count != src_keys:
+                        raise MigrationError(
+                            f"因子 {factor_name} 宽表对账失败"
+                            f"（宽表 {wide_count} != 源键数 {src_keys}）"
+                        )
+
+                    conn.execute(hist_sql)
+                    hist_after = conn.execute(
+                        f"SELECT COUNT(*) FROM factor_history WHERE factor_name = '{factor_name}'"
+                    ).fetchone()[0]
+                    if hist_after != src_rows:
+                        raise MigrationError(
+                            f"因子 {factor_name} 历史表对账失败"
+                            f"（历史 {hist_after} != 源 {src_rows}）"
+                        )
+
+                    conn.execute("COMMIT")
+                except Exception:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    raise
+
+            logger.info(f"  因子 {factor_name}: {wide_count:,} 键 / {src_rows:,} 行 → wide + history")
             return wide_count
 
+        except MigrationError:
+            raise
         except Exception as e:
             logger.error(f"迁移因子 {factor_name} 失败: {e}")
-            return 0
+            raise MigrationError(f"迁移因子 {factor_name} 失败: {e}") from e
 
     def _replace_factor_data_with_view(self) -> bool:
-        """将 factor_data 表替换为视图（UNPIVOT factor_wide）"""
+        """将 factor_data 表替换为视图（UNPIVOT factor_wide）
+
+        安全语义（见 docs/design/migration_safety_design.md §4）：
+        - RENAME 备份 + CREATE VIEW 在同一事务内，失败整体回滚
+        - 原表绝不 DROP，保留为 factor_data_backup_<ts>
+        - 已迁移（factor_data 已是视图）时直接返回 True
+
+        Raises:
+            MigrationError: 替换失败（已回滚，factor_data 仍为原表）
+        """
+        backup_name = f"factor_data_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
         try:
             with self.conn as conn:
+                self._configure_migration(conn)
+
+                current_type = self._table_type(conn, 'factor_data')
+                if current_type == 'VIEW':
+                    logger.info("factor_data 已是视图，无需替换")
+                    return True
+                if current_type is None:
+                    raise MigrationError("factor_data 表不存在，无法替换为视图")
+
                 # 获取宽表因子列
                 factor_cols = conn.execute('''
                     SELECT column_name FROM information_schema.columns
@@ -974,12 +1108,7 @@ class SchemaManager:
                 factor_list = [f[0] for f in factor_cols]
 
                 if not factor_list:
-                    logger.warning("factor_wide 无因子列，视图创建失败")
-                    return False
-
-                # 必须先 DROP 原有 Table，再 CREATE View
-                conn.execute("DROP TABLE IF EXISTS factor_data")
-                conn.execute("DROP VIEW IF EXISTS factor_data")
+                    raise MigrationError("factor_wide 无因子列，无法创建视图")
 
                 union_parts = []
                 for f in factor_list:
@@ -992,13 +1121,69 @@ class SchemaManager:
                     {union_sql}
                     ORDER BY factor_name, trade_date, stock_code
                 '''
-                conn.execute(view_sql)
 
-            logger.info(f"factor_data 视图创建完成（{len(factor_list)} 个因子）")
+                # 单事务：RENAME 备份 + 创建视图，任一失败整体回滚
+                conn.execute("BEGIN TRANSACTION")
+                try:
+                    conn.execute(f'ALTER TABLE factor_data RENAME TO "{backup_name}"')
+                    conn.execute(view_sql)
+                    conn.execute("COMMIT")
+                except Exception:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    # 兜底：若原名缺失而备份存在，改回原名
+                    try:
+                        if (
+                            self._table_type(conn, 'factor_data') is None
+                            and self._table_type(conn, backup_name) is not None
+                        ):
+                            conn.execute(
+                                f'ALTER TABLE "{backup_name}" RENAME TO factor_data'
+                            )
+                            logger.warning("factor_data 视图替换失败，已恢复原表")
+                    except Exception as restore_err:
+                        logger.critical(
+                            f"恢复 factor_data 原表失败，数据保留在 {backup_name}: {restore_err}"
+                        )
+                    raise
+
+            logger.info(
+                f"factor_data 视图创建完成（{len(factor_list)} 个因子），"
+                f"原表备份为 {backup_name}"
+            )
             return True
 
+        except MigrationError:
+            raise
         except Exception as e:
             logger.error(f"创建 factor_data 视图失败: {e}")
+            raise MigrationError(f"factor_data 视图替换失败: {e}") from e
+
+    def _table_type(self, conn, table_name: str) -> Optional[str]:
+        """查询对象类型（TABLE / VIEW / None）
+
+        Args:
+            conn: 底层 duckdb 连接
+            table_name: 对象名
+
+        Returns:
+            'BASE TABLE'、'VIEW' 或 None（不存在）
+        """
+        row = conn.execute(
+            "SELECT table_type FROM information_schema.tables "
+            "WHERE table_schema = 'main' AND table_name = ?",
+            [table_name],
+        ).fetchone()
+        return row[0] if row else None
+
+    def _is_view(self, table_name: str) -> bool:
+        """判断对象是否为视图（不存在或异常时返回 False）"""
+        try:
+            with self.conn as conn:
+                return self._table_type(conn, table_name) == 'VIEW'
+        except Exception:
             return False
 
     def _get_row_count(self, table_name: str) -> int:
