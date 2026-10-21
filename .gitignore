@@ -61,3 +61,8 @@ benchmark_results/
 *.tmp
 temp/
 tmp/
+
+# ============================
+# Agent Workspace
+# ============================
+.trae/
