@@ -1,7 +1,8 @@
-"""
+r"""
 Phase 2: Level 1 Data 全量导入脚本
 
-将 E:\Level 1 Data 下的所有 Feather 文件导入到 level1_snapshots 表。
+将 Level 1 Data 目录下的所有 Feather 文件导入到 level1_snapshots 表。
+默认路径 E:\Level 1 Data，可用 LEVEL1_DATA_PATH 覆盖。
 
 用法:
     python scripts/import_phase2_level1.py
@@ -13,20 +14,21 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from loaders.base import LoaderConfig, BaseLoader
 from loaders.level1_loader import Level1Loader
 
 logger = logging.getLogger(__name__)
 
-LEVEL1_ROOT = Path(r'E:\Level 1 Data')
+LEVEL1_ROOT = Path(os.getenv('LEVEL1_DATA_PATH', r'E:\Level 1 Data'))
 
 
 def init_database(db_path: str) -> bool:

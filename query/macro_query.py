@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional, List
+from typing import Any, Optional, List
 
 import pandas as pd
+
+from Factor_DB.utils.sql_utils import bind, bind_in
 
 from .base import BaseQuery, QueryFilter
 
@@ -49,20 +51,22 @@ class MacroQuery(BaseQuery):
             宏观数据 DataFrame
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
 
-        indicator_list = ', '.join([f"'{i}'" for i in indicator_ids])
+        indicator_list = bind_in(params, 'indicator', indicator_ids)
+        value_type_param = bind(params, 'value_type', value_type)
 
         sql = f'''
             SELECT trade_date, indicator_id, indicator_name, value, value_type
             FROM macro_data
             WHERE indicator_id IN ({indicator_list})
-              AND value_type = '{value_type}'
+              AND value_type = {value_type_param}
               AND {date_filter}
             ORDER BY trade_date, indicator_id
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.debug(f"宏观数据查询完成: {len(df)} 条记录")
         return df
 
@@ -99,12 +103,14 @@ class MacroQuery(BaseQuery):
         Returns:
             指标列表 DataFrame
         """
+        params: dict[str, Any] = {}
         if category:
-            sql = f"SELECT * FROM macro_indicators WHERE category = '{category}' ORDER BY indicator_id"
+            category_param = bind(params, 'category', category)
+            sql = f"SELECT * FROM macro_indicators WHERE category = {category_param} ORDER BY indicator_id"
         else:
             sql = "SELECT * FROM macro_indicators ORDER BY category, indicator_id"
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_indicator_stats(self, indicator_id: str,
                            start_date: Optional[date] = None,
@@ -120,7 +126,9 @@ class MacroQuery(BaseQuery):
             统计信息字典
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        indicator_param = bind(params, 'indicator_id', indicator_id)
 
         sql = f'''
             SELECT
@@ -131,11 +139,11 @@ class MacroQuery(BaseQuery):
                 MAX(value) as max,
                 MEDIAN(value) as median
             FROM macro_data
-            WHERE indicator_id = '{indicator_id}'
+            WHERE indicator_id = {indicator_param}
               AND {date_filter}
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         if df.empty:
             return {}
 
@@ -157,8 +165,9 @@ class MacroQuery(BaseQuery):
         Returns:
             最新值 DataFrame
         """
+        params: dict[str, Any] = {}
         if indicator_ids:
-            indicator_list = ', '.join([f"'{i}'" for i in indicator_ids])
+            indicator_list = bind_in(params, 'indicator', indicator_ids)
             sql = f'''
                 SELECT indicator_id, indicator_name, value, trade_date as latest_date
                 FROM macro_data
@@ -178,7 +187,7 @@ class MacroQuery(BaseQuery):
                 )
             '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_macro_by_date_range(self, start_date: date,
                                end_date: date,
@@ -193,21 +202,25 @@ class MacroQuery(BaseQuery):
         Returns:
             宏观数据 DataFrame
         """
+        params: dict[str, Any] = {
+            'start_date': start_date,
+            'end_date': end_date,
+        }
         category_filter = ""
         if categories:
-            cat_list = ', '.join([f"'{c}'" for c in categories])
+            cat_list = bind_in(params, 'category', categories)
             category_filter = f"AND mi.category IN ({cat_list})"
 
         sql = f'''
             SELECT md.trade_date, md.indicator_id, md.indicator_name, md.value, mi.category
             FROM macro_data md
             JOIN macro_indicators mi ON md.indicator_id = mi.indicator_id
-            WHERE md.trade_date BETWEEN '{start_date}' AND '{end_date}'
+            WHERE md.trade_date BETWEEN $start_date AND $end_date
               {category_filter}
             ORDER BY md.trade_date, md.indicator_id
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def calculate_yoy(self, indicator_id: str,
                      periods: int = 12) -> pd.DataFrame:
@@ -220,12 +233,18 @@ class MacroQuery(BaseQuery):
         Returns:
             同比数据 DataFrame
         """
+        params: dict[str, Any] = {}
+        indicator_param = bind(params, 'indicator_id', indicator_id)
+        periods = int(periods)
+        if periods <= 0:
+            raise ValueError(f"periods 必须为正整数: {periods}")
+
         sql = f'''
             WITH ordered AS (
                 SELECT trade_date, value,
                        LAG(value, {periods}) OVER (ORDER BY trade_date) as prev_value
                 FROM macro_data
-                WHERE indicator_id = '{indicator_id}'
+                WHERE indicator_id = {indicator_param}
                   AND value_type = 'raw'
                 ORDER BY trade_date
             )
@@ -235,7 +254,7 @@ class MacroQuery(BaseQuery):
             WHERE prev_value IS NOT NULL
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def identify_macro_regime(self, start_date: date,
                              end_date: date,
@@ -255,10 +274,10 @@ class MacroQuery(BaseQuery):
             SELECT trade_date, indicator_id, value
             FROM macro_data
             WHERE indicator_id IN ('PMI', 'CPI_yoy', 'M2_yoy')
-              AND trade_date BETWEEN '{start_date}' AND '{end_date}'
+              AND trade_date BETWEEN $start_date AND $end_date
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, {'start_date': start_date, 'end_date': end_date})
         if df.empty:
             return pd.DataFrame()
 

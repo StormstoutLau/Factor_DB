@@ -15,7 +15,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
+
+from Factor_DB.utils.sql_utils import (
+    bind,
+    bind_in,
+    escape_literal,
+    quote_identifier,
+    validate_identifier,
+)
 
 from .connection import DuckDBConnection
 
@@ -369,9 +377,10 @@ class SchemaManager:
         Returns:
             是否删除成功
         """
+        validate_identifier(index_name, '索引名')
         try:
             with self.conn as conn:
-                conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+                conn.execute(f"DROP INDEX IF EXISTS {quote_identifier(index_name)}")
             logger.info(f"索引删除成功: {index_name}")
             return True
         except Exception as e:
@@ -473,9 +482,10 @@ class SchemaManager:
         Returns:
             是否删除成功
         """
+        validate_identifier(table_name, '表名')
         try:
             with self.conn as conn:
-                conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                conn.execute(f"DROP TABLE IF EXISTS {quote_identifier(table_name)}")
             logger.info(f"表删除成功: {table_name}")
             return True
         except Exception as e:
@@ -513,14 +523,20 @@ class SchemaManager:
         if not self.table_exists(table_name):
             return None
 
+        validate_identifier(table_name, '表名')
+
         try:
             with self.conn as conn:
                 # 行数
-                row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                row_count = conn.execute(
+                    f"SELECT COUNT(*) FROM {quote_identifier(table_name)}"
+                ).fetchone()[0]
 
                 # 列信息
                 columns = conn.execute(
-                    f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{table_name}'"
+                    "SELECT column_name, data_type FROM information_schema.columns "
+                    "WHERE table_name = ?",
+                    [table_name],
                 ).fetchdf()
 
                 return {
@@ -585,21 +601,22 @@ class SchemaManager:
         }
 
         pk_list = ', '.join(pk_cols[table_name])
+        table_ident = quote_identifier(table_name)
 
         sql = f'''
-            DELETE FROM {table_name}
+            DELETE FROM {table_ident}
             WHERE ({pk_list}, loaded_at) NOT IN (
                 SELECT {pk_list}, MAX(loaded_at)
-                FROM {table_name}
-                WHERE loaded_at < '{keep_before}'
+                FROM {table_ident}
+                WHERE loaded_at < $keep_before
                 GROUP BY {pk_list}
             )
-            AND loaded_at < '{keep_before}'
+            AND loaded_at < $keep_before
         '''
 
         try:
             with self.conn as conn:
-                conn.execute(sql)
+                conn.execute(sql, {'keep_before': keep_before})
             # 获取删除行数（DuckDB 不直接返回，用查询统计）
             # 简单返回成功标记
             logger.info(f"表 {table_name} 历史数据清理完成 (cutoff: {keep_before})")
@@ -633,7 +650,8 @@ class SchemaManager:
             'loaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP',
         ]
         for name in factor_names:
-            parts.append(f'"{name}" DOUBLE')
+            # DDL 不支持参数绑定：先白名单校验，再双引号转义
+            parts.append(f'{quote_identifier(validate_identifier(name, "因子名"))} DOUBLE')
         parts.append('PRIMARY KEY (trade_date, stock_code)')
 
         cols_sql = ',\n    '.join(parts)
@@ -694,9 +712,14 @@ class SchemaManager:
         Returns:
             是否添加成功
         """
+        validate_identifier(table_name, '表名')
+        factor_col = quote_identifier(validate_identifier(factor_name, '因子名'))
         try:
             with self.conn as conn:
-                conn.execute(f'ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "{factor_name}" DOUBLE')
+                conn.execute(
+                    f'ALTER TABLE {quote_identifier(table_name)} '
+                    f'ADD COLUMN IF NOT EXISTS {factor_col} DOUBLE'
+                )
             logger.info(f"宽表 {table_name} 添加因子列: {factor_name}")
             return True
         except Exception as e:
@@ -712,13 +735,14 @@ class SchemaManager:
         Returns:
             因子列名列表
         """
+        validate_identifier(table_name, '表名')
         try:
             with self.conn as conn:
-                rows = conn.execute(f"""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = '{table_name}'
-                    ORDER BY ordinal_position
-                """).fetchall()
+                rows = conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = ? ORDER BY ordinal_position",
+                    [table_name],
+                ).fetchall()
             return [r[0] for r in rows if r[0] not in self.WIDE_META_COLUMNS]
         except Exception as e:
             logger.error(f"获取宽表 {table_name} 因子列失败: {e}")
@@ -745,10 +769,21 @@ class SchemaManager:
         Returns:
             写入宽表的行数
         """
+        validate_identifier(long_table, '源表名')
+        validate_identifier(wide_table, '目标表名')
+        for f in factor_names:
+            validate_identifier(f, '因子名')
+
+        params: dict[str, Any] = {}
+        # 因子名作为值绑定到 SQL（参数名与 IN 列表复用）
         case_exprs = ',\n        '.join(
-            f'MAX(CASE WHEN factor_name = \'{f}\' THEN factor_value END) AS "{f}"'
-            for f in factor_names
+            f'MAX(CASE WHEN factor_name = {bind(params, f"factor_name_{i}", f)} '
+            f'THEN factor_value END) AS {quote_identifier(f)}'
+            for i, f in enumerate(factor_names)
         )
+        factor_in_list = bind_in(params, 'factor_name', factor_names)
+        long_ident = quote_identifier(long_table)
+        wide_ident = quote_identifier(wide_table)
 
         if use_latest:
             source_sql = f'''
@@ -759,20 +794,20 @@ class SchemaManager:
                             PARTITION BY trade_date, stock_code, factor_name
                             ORDER BY loaded_at DESC
                         ) AS rn
-                    FROM {long_table}
-                    WHERE factor_name IN ({', '.join(f"'{f}'" for f in factor_names)})
+                    FROM {long_ident}
+                    WHERE factor_name IN ({factor_in_list})
                 )
                 WHERE rn = 1
             '''
         else:
             source_sql = f'''
                 SELECT trade_date, stock_code, factor_name, factor_value, loaded_at
-                FROM {long_table}
-                WHERE factor_name IN ({', '.join(f"'{f}'" for f in factor_names)})
+                FROM {long_ident}
+                WHERE factor_name IN ({factor_in_list})
             '''
 
         sql = f'''
-            INSERT INTO {wide_table}
+            INSERT INTO {wide_ident}
             SELECT
                 trade_date,
                 stock_code,
@@ -786,8 +821,10 @@ class SchemaManager:
 
         try:
             with self.conn as conn:
-                conn.execute(sql)
-                row_count = conn.execute(f"SELECT COUNT(*) FROM {wide_table}").fetchone()[0]
+                conn.execute(sql, params)
+                row_count = conn.execute(
+                    f"SELECT COUNT(*) FROM {wide_ident}"
+                ).fetchone()[0]
             logger.info(f"PIVOT {long_table} → {wide_table}: {row_count} 行, {len(factor_names)} 个因子")
             return row_count
         except Exception as e:
@@ -815,7 +852,15 @@ class SchemaManager:
         Returns:
             写入长表的行数
         """
-        factor_list = ', '.join(f'"{f}"' for f in factor_names)
+        validate_identifier(wide_table, '源表名')
+        validate_identifier(long_table, '目标表名')
+        for f in factor_names:
+            validate_identifier(f, '因子名')
+
+        # UNPIVOT 列清单属于标识符位置，DDL/DML 均不支持参数绑定
+        factor_list = ', '.join(quote_identifier(f) for f in factor_names)
+        wide_ident = quote_identifier(wide_table)
+        long_ident = quote_identifier(long_table)
 
         if skip_nulls:
             where_clause = "WHERE factor_value IS NOT NULL"
@@ -823,9 +868,9 @@ class SchemaManager:
             where_clause = ""
 
         sql = f'''
-            INSERT INTO {long_table}
+            INSERT INTO {long_ident}
             SELECT trade_date, stock_code, factor_name, factor_value, loaded_at
-            FROM {wide_table}
+            FROM {wide_ident}
             UNPIVOT (
                 factor_value FOR factor_name IN ({factor_list})
             )
@@ -834,9 +879,13 @@ class SchemaManager:
 
         try:
             with self.conn as conn:
-                before = conn.execute(f"SELECT COUNT(*) FROM {long_table}").fetchone()[0]
+                before = conn.execute(
+                    f"SELECT COUNT(*) FROM {long_ident}"
+                ).fetchone()[0]
                 conn.execute(sql)
-                after = conn.execute(f"SELECT COUNT(*) FROM {long_table}").fetchone()[0]
+                after = conn.execute(
+                    f"SELECT COUNT(*) FROM {long_ident}"
+                ).fetchone()[0]
                 row_count = after - before
             logger.info(f"UNPIVOT {wide_table} → {long_table}: {row_count} 行, {len(factor_names)} 个因子")
             return row_count
@@ -956,45 +1005,50 @@ class SchemaManager:
         Raises:
             MigrationError: 迁移失败或行数对账不一致
         """
+        factor_col = quote_identifier(validate_identifier(factor_name, '因子名'))
+        params = {'factor_name': factor_name}
+
         try:
             with self.conn as conn:
                 self._configure_migration(conn)
 
                 src_rows = conn.execute(
-                    f"SELECT COUNT(*) FROM factor_data "
-                    f"WHERE factor_name = '{factor_name}' AND factor_value IS NOT NULL"
+                    "SELECT COUNT(*) FROM factor_data "
+                    "WHERE factor_name = $factor_name AND factor_value IS NOT NULL",
+                    params,
                 ).fetchone()[0]
                 if src_rows == 0:
                     logger.info(f"  因子 {factor_name}: 无非空数据，跳过")
                     return 0
 
-                src_keys = conn.execute(f'''
+                src_keys = conn.execute('''
                     SELECT COUNT(*) FROM (
                         SELECT DISTINCT trade_date, stock_code
                         FROM factor_data
-                        WHERE factor_name = '{factor_name}' AND factor_value IS NOT NULL
+                        WHERE factor_name = $factor_name AND factor_value IS NOT NULL
                     ) t
-                ''').fetchone()[0]
+                ''', params).fetchone()[0]
 
                 hist_existing = conn.execute(
-                    f"SELECT COUNT(*) FROM factor_history WHERE factor_name = '{factor_name}'"
+                    "SELECT COUNT(*) FROM factor_history WHERE factor_name = $factor_name",
+                    params,
                 ).fetchone()[0]
 
                 # 宽表 Upsert：arg_max 取 loaded_at 最新版本（内存安全，见设计文档 §2.2）
                 wide_sql = f'''
-                    INSERT INTO factor_wide (trade_date, stock_code, loaded_at, "{factor_name}")
+                    INSERT INTO factor_wide (trade_date, stock_code, loaded_at, {factor_col})
                     SELECT
                         trade_date,
                         stock_code,
                         COALESCE(max(loaded_at), CURRENT_TIMESTAMP) AS loaded_at,
                         arg_max(factor_value, COALESCE(loaded_at, CURRENT_TIMESTAMP)) AS factor_value
                     FROM factor_data
-                    WHERE factor_name = '{factor_name}'
+                    WHERE factor_name = $factor_name
                       AND factor_value IS NOT NULL
                     GROUP BY trade_date, stock_code
                     ON CONFLICT (trade_date, stock_code)
                     DO UPDATE SET
-                        "{factor_name}" = EXCLUDED."{factor_name}",
+                        {factor_col} = EXCLUDED.{factor_col},
                         loaded_at = EXCLUDED.loaded_at
                 '''
 
@@ -1005,9 +1059,9 @@ class SchemaManager:
                             f"因子 {factor_name} 历史表数据不完整"
                             f"（{hist_existing} < 源 {src_rows}），需人工介入"
                         )
-                    conn.execute(wide_sql)
+                    conn.execute(wide_sql, params)
                     wide_count = conn.execute(
-                        f'SELECT COUNT(*) FROM factor_wide WHERE "{factor_name}" IS NOT NULL'
+                        f"SELECT COUNT(*) FROM factor_wide WHERE {factor_col} IS NOT NULL"
                     ).fetchone()[0]
                     if wide_count < src_keys:
                         raise MigrationError(
@@ -1030,16 +1084,16 @@ class SchemaManager:
                         factor_value,
                         COALESCE(loaded_at, CURRENT_TIMESTAMP)
                     FROM factor_data
-                    WHERE factor_name = '{factor_name}'
+                    WHERE factor_name = $factor_name
                       AND factor_value IS NOT NULL
                 '''
 
                 # 单因子事务：wide + history 原子提交，失败整体回滚
                 conn.execute("BEGIN TRANSACTION")
                 try:
-                    conn.execute(wide_sql)
+                    conn.execute(wide_sql, params)
                     wide_count = conn.execute(
-                        f'SELECT COUNT(*) FROM factor_wide WHERE "{factor_name}" IS NOT NULL'
+                        f"SELECT COUNT(*) FROM factor_wide WHERE {factor_col} IS NOT NULL"
                     ).fetchone()[0]
                     if wide_count != src_keys:
                         raise MigrationError(
@@ -1047,9 +1101,10 @@ class SchemaManager:
                             f"（宽表 {wide_count} != 源键数 {src_keys}）"
                         )
 
-                    conn.execute(hist_sql)
+                    conn.execute(hist_sql, params)
                     hist_after = conn.execute(
-                        f"SELECT COUNT(*) FROM factor_history WHERE factor_name = '{factor_name}'"
+                        "SELECT COUNT(*) FROM factor_history WHERE factor_name = $factor_name",
+                        params,
                     ).fetchone()[0]
                     if hist_after != src_rows:
                         raise MigrationError(
@@ -1112,8 +1167,13 @@ class SchemaManager:
 
                 union_parts = []
                 for f in factor_list:
+                    # CREATE VIEW 属于 DDL，不支持预处理参数：
+                    # 因子名先白名单校验，再按字面量/标识符规则转义
+                    validate_identifier(f, '因子名')
                     union_parts.append(
-                        f"SELECT trade_date, stock_code, '{f}' AS factor_name, \"{f}\" AS factor_value, loaded_at FROM factor_wide WHERE \"{f}\" IS NOT NULL"
+                        f"SELECT trade_date, stock_code, {escape_literal(f)} AS factor_name, "
+                        f"{quote_identifier(f)} AS factor_value, loaded_at "
+                        f"FROM factor_wide WHERE {quote_identifier(f)} IS NOT NULL"
                     )
                 union_sql = '\n    UNION ALL\n    '.join(union_parts)
                 view_sql = f'''
@@ -1125,7 +1185,9 @@ class SchemaManager:
                 # 单事务：RENAME 备份 + 创建视图，任一失败整体回滚
                 conn.execute("BEGIN TRANSACTION")
                 try:
-                    conn.execute(f'ALTER TABLE factor_data RENAME TO "{backup_name}"')
+                    conn.execute(
+                        f'ALTER TABLE factor_data RENAME TO {quote_identifier(backup_name)}'
+                    )
                     conn.execute(view_sql)
                     conn.execute("COMMIT")
                 except Exception:
@@ -1188,8 +1250,11 @@ class SchemaManager:
 
     def _get_row_count(self, table_name: str) -> int:
         """获取表行数"""
+        validate_identifier(table_name, '表名')
         try:
             with self.conn as conn:
-                return conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                return conn.execute(
+                    f"SELECT COUNT(*) FROM {quote_identifier(table_name)}"
+                ).fetchone()[0]
         except Exception:
             return 0

@@ -15,7 +15,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from .base import BaseLoader, LoaderConfig
-from utils.code_utils import normalize_stock_code
+from Factor_DB.utils.code_utils import normalize_stock_code
+from Factor_DB.utils.sql_utils import quote_identifier, validate_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +47,13 @@ class DailyLoader(BaseLoader):
     def __init__(self, config: Optional[LoaderConfig] = None):
         super().__init__(config)
 
-        # 性能优化配置
+        # 性能优化配置（memory_limit/threads/temp_directory 来自 LoaderConfig）
         with self.conn as conn:
-            conn.execute("SET memory_limit='20GB'")
-            conn.execute("SET threads=4")
-            conn.execute("SET preserve_insertion_order=false")
-            conn.execute("SET temp_directory='F:\\Coding\\Factor_DB\\factor_db.duckdb.tmp'")
-            logger.info("DuckDB 性能配置已优化 (memory_limit=20GB, threads=4, temp_directory 已设置)")
+            self._apply_settings(conn)
+            logger.info(
+                f"DuckDB 性能配置已应用 (memory_limit={self.config.memory_limit}, "
+                f"threads={self.config.threads}, temp_directory={self.config.temp_directory})"
+            )
 
     def load(self, data_path: Path, field_name: str = '') -> int:
         """加载日 K 数据
@@ -203,10 +204,8 @@ class DailyLoader(BaseLoader):
 
             # 使用 DuckDB UNPIVOT 进行宽→长转换（比 pandas melt 快 3-4x）
             with self.conn as conn:
-                # 确保内存限制生效
-                conn.execute("SET memory_limit='20GB'")
-                conn.execute("SET threads=4")
-                conn.execute("SET preserve_insertion_order=false")
+                # 确保配置生效（内存/线程/临时目录）
+                self._apply_settings(conn)
 
                 conn.register('_wide', df)
 
@@ -227,17 +226,21 @@ class DailyLoader(BaseLoader):
 
                 # Step 3: 导入到目标表
                 if field_name in ('close', 'open', 'high', 'low', 'volume', 'amount'):
+                    # 列名为代码常量白名单，校验后插值
+                    validate_identifier(field_name, '价格字段')
                     conn.execute(f'''
                         INSERT INTO daily_prices (trade_date, stock_code, {field_name})
                         SELECT trade_date, stock_code, val AS {field_name}
                         FROM _long
                     ''')
                 else:
-                    conn.execute(f'''
+                    # 因子名作为值使用命名参数绑定
+                    validate_identifier(field_name, '因子名')
+                    conn.execute('''
                         INSERT INTO factor_data (trade_date, stock_code, factor_name, factor_value)
-                        SELECT trade_date, stock_code, '{field_name}' AS factor_name, val AS factor_value
+                        SELECT trade_date, stock_code, $factor_name AS factor_name, val AS factor_value
                         FROM _long
-                    ''')
+                    ''', {'factor_name': field_name})
 
                 conn.execute('DROP TABLE IF EXISTS _long')
                 conn.unregister('_wide')
@@ -266,6 +269,7 @@ class DailyLoader(BaseLoader):
                 conn.register('temp_daily', df)
 
                 # 使用 INSERT 追加写入（loaded_at 自动填充），支持 PIT 多版本
+                validate_identifier(field_name, '字段名')
                 conn.execute(f'''
                     INSERT INTO daily_prices (trade_date, stock_code, {field_name})
                     SELECT trade_date, stock_code, {field_name}
@@ -393,6 +397,43 @@ class DailyLoader(BaseLoader):
     # 宽表架构 (方案A: factor_wide + factor_history)
     # =============================
 
+    def _validate_wide_factor_input(self, df: pd.DataFrame, factor_name: str) -> None:
+        """校验宽表因子输入格式
+
+        Args:
+            df: 待校验 DataFrame
+            factor_name: 因子名称
+
+        Raises:
+            ValueError: 空数据 / 长表输入 / 日期列不合法 / 非法因子名
+        """
+        if df is None or df.empty:
+            raise ValueError("因子数据为空")
+
+        long_format_cols = {'stock_code', 'factor_name', 'factor_value'} & set(
+            str(c) for c in df.columns
+        )
+        if long_format_cols:
+            raise ValueError(
+                f"检测到长表列 {sorted(long_format_cols)}；"
+                "load_factor_to_wide 需要宽表格式：index=日期，columns=股票代码。"
+                "示例：pd.DataFrame([[15.3, 22.1]], index=pd.to_datetime(['2024-01-02']), "
+                "columns=['000001', '000002'])"
+            )
+
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if df.shape[1] == 0:
+                raise ValueError("因子数据缺少股票代码列")
+            try:
+                pd.to_datetime(df.iloc[:, 0])
+            except (ValueError, TypeError) as e:
+                raise ValueError("宽表首列或 index 必须为日期类型") from e
+
+        if df.shape[1] < 1:
+            raise ValueError("因子数据缺少股票代码列")
+
+        validate_identifier(factor_name, '因子名')
+
     def load_factor_to_wide(self, df: pd.DataFrame, factor_name: str) -> int:
         """加载单因子数据到宽表 (factor_wide)，同时双写到历史长表 (factor_history)
 
@@ -407,11 +448,15 @@ class DailyLoader(BaseLoader):
 
         Returns:
             宽表中的总行数（所有因子，非仅本次）
+
+        Raises:
+            ValueError: 输入格式不合法（长表 / 空数据 / 非法因子名）
         """
+        self._validate_wide_factor_input(df, factor_name)
         logger.info(f"加载因子 {factor_name} → factor_wide + factor_history")
 
         try:
-            from core.schema import SchemaManager
+            from Factor_DB.core.schema import SchemaManager
             schema = SchemaManager(self.conn)
 
             if not schema.table_exists('factor_wide'):
@@ -437,9 +482,10 @@ class DailyLoader(BaseLoader):
             rename_map = {c: normalize_stock_code(c) for c in code_cols}
             work_df = work_df.rename(columns=rename_map)
 
+            factor_col = quote_identifier(factor_name)
+
             with self.conn as conn:
-                conn.execute("SET memory_limit='20GB'")
-                conn.execute("SET threads=4")
+                self._apply_settings(conn)
 
                 conn.execute('DROP TABLE IF EXISTS _long_tmp')
                 conn.register('_wide_tmp', work_df)
@@ -459,19 +505,19 @@ class DailyLoader(BaseLoader):
                 ''')
 
                 hist_count = conn.execute('SELECT COUNT(*) FROM _long_tmp').fetchone()[0]
-                conn.execute(f'''
+                conn.execute('''
                     INSERT INTO factor_history (trade_date, stock_code, factor_name, factor_value)
-                    SELECT trade_date, stock_code, '{factor_name}' AS factor_name, factor_value
+                    SELECT trade_date, stock_code, $factor_name AS factor_name, factor_value
                     FROM _long_tmp
-                ''')
+                ''', {'factor_name': factor_name})
                 logger.debug(f"factor_history 写入 {hist_count} 行")
 
                 conn.execute(f'''
-                    INSERT INTO factor_wide (trade_date, stock_code, "{factor_name}", loaded_at)
+                    INSERT INTO factor_wide (trade_date, stock_code, {factor_col}, loaded_at)
                     SELECT trade_date, stock_code, factor_value, CURRENT_TIMESTAMP AS loaded_at
                     FROM _long_tmp
                     ON CONFLICT (trade_date, stock_code) DO UPDATE SET
-                        "{factor_name}" = EXCLUDED."{factor_name}",
+                        {factor_col} = EXCLUDED.{factor_col},
                         loaded_at = EXCLUDED.loaded_at
                 ''')
 
@@ -483,9 +529,11 @@ class DailyLoader(BaseLoader):
             logger.info(f"因子 {factor_name} 加载完成: wide={wide_count} 行, history={hist_count} 行")
             return wide_count
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"加载因子 {factor_name} 到宽表失败: {e}")
             import traceback
             traceback.print_exc()
-            return 0
+            raise
 

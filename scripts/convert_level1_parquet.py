@@ -1,10 +1,12 @@
-"""
+r"""
 Level 1 Feather → Parquet 分区转换脚本
 
-将 E:\Level 1 Data 下所有 Feather 文件转换为 Hive 分区 Parquet。
-输出到 data/level1_parquet/ 目录。
+将 Level 1 Data 目录下所有 Feather 文件转换为 Hive 分区 Parquet。
+默认源目录 E:\Level 1 Data（可用 LEVEL1_DATA_PATH 覆盖），
+默认输出到项目内 data/level1_parquet/（可用 LEVEL1_PARQUET_DIR 覆盖）。
 """
 
+import os
 import sys
 import logging
 from pathlib import Path
@@ -20,8 +22,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-FEATHER_DIR = Path(r'E:\Level 1 Data')
-OUTPUT_DIR = Path(r'F:\Coding\Factor_DB\data\level1_parquet')
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FEATHER_DIR = Path(os.getenv('LEVEL1_DATA_PATH', r'E:\Level 1 Data'))
+OUTPUT_DIR = Path(os.getenv(
+    'LEVEL1_PARQUET_DIR', str(PROJECT_ROOT / 'data' / 'level1_parquet')
+))
 
 if __name__ == '__main__':
     logger.info("=" * 60)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -22,17 +23,31 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
+from Factor_DB.utils.sql_utils import escape_literal
 from loaders.base import LoaderConfig
 from loaders.daily_loader import DailyLoader
 from utils.code_utils import normalize_stock_code
 
 logger = logging.getLogger(__name__)
 
-ASHARE_ROOT = Path(r'E:\Ashare_data')
+# 数据根目录可通过环境变量覆盖（默认沿用本机历史路径）
+ASHARE_ROOT = Path(os.getenv('ASHARE_DATA_PATH', r'E:\Ashare_data'))
 MARKET_DATA = ASHARE_ROOT / 'market_data'
-FACTOR_DIR = ASHARE_ROOT / '财务指标因子'
+FACTOR_DIR = ASHARE_ROOT / 'financial_factors'
+
+# 导入期 DuckDB 资源参数（环境变量可覆盖）
+IMPORT_MEMORY_LIMIT = os.getenv('FACTOR_DB_IMPORT_MEMORY_LIMIT', '16GB')
+IMPORT_THREADS = int(os.getenv('FACTOR_DB_THREADS', '4'))
+
+
+def _apply_import_settings(conn) -> None:
+    """应用导入期 DuckDB 资源参数（内存/线程/写入顺序）"""
+    conn.execute(f"SET memory_limit={escape_literal(IMPORT_MEMORY_LIMIT)}")
+    conn.execute(f"SET threads={IMPORT_THREADS}")
+    conn.execute("SET preserve_insertion_order=false")
+
 
 # 行情数据文件映射: {文件名 → 目标字段名}
 OHLCV_FILES = {
@@ -282,6 +297,7 @@ def import_financial_factors(db_path: str, skip_existing: bool = True) -> dict[s
     logger.info("=" * 50)
 
     if not FACTOR_DIR.exists():
+        logger.warning(f"财务因子目录不存在: {FACTOR_DIR}")
         return {}
 
     # 获取已导入的因子
@@ -292,18 +308,17 @@ def import_financial_factors(db_path: str, skip_existing: bool = True) -> dict[s
     # 导入前：删除 factor_data 二级索引以加速写入
     conn_mgr = DuckDBConnection(db_path, read_only=False, close_on_exit=False)
     with conn_mgr as conn:
-        conn.execute("SET memory_limit='16GB'")
-        conn.execute("SET threads=4")
-        conn.execute("SET preserve_insertion_order=false")
+        _apply_import_settings(conn)
     schema = SchemaManager(conn_mgr)
     schema.drop_factor_indexes()
-    logger.info("factor_data 二级索引已删除，memory_limit=16GB，开始批量导入")
+    logger.info(f"factor_data 二级索引已删除，memory_limit={IMPORT_MEMORY_LIMIT}，开始批量导入")
 
     config = LoaderConfig(db_path=db_path, show_progress=True)
     loader = DailyLoader(config)
     results = {}
 
-    factor_files = sorted(FACTOR_DIR.glob('*.pkl'))
+    # 因子文件按类别存放在子目录，需递归查找
+    factor_files = sorted(FACTOR_DIR.rglob('*.pkl'))
     logger.info(f"发现 {len(factor_files)} 个财务因子文件")
 
     for filepath in factor_files:
@@ -321,9 +336,7 @@ def import_financial_factors(db_path: str, skip_existing: bool = True) -> dict[s
 
     # 导入后：重建索引（再次设置 memory_limit 确保生效）
     with conn_mgr as conn:
-        conn.execute("SET memory_limit='16GB'")
-        conn.execute("SET threads=4")
-        conn.execute("SET preserve_insertion_order=false")
+        _apply_import_settings(conn)
     schema.recreate_factor_indexes(safe_only=True)
     logger.info("factor_data 二级索引已重建 (safe_only)")
     conn_mgr.close()
@@ -349,12 +362,10 @@ def import_special_factors(db_path: str) -> dict[str, int]:
     # 导入前：删除 factor_data 二级索引以加速写入
     conn_mgr = DuckDBConnection(db_path, read_only=False, close_on_exit=False)
     with conn_mgr as conn:
-        conn.execute("SET memory_limit='16GB'")
-        conn.execute("SET threads=4")
-        conn.execute("SET preserve_insertion_order=false")
+        _apply_import_settings(conn)
     schema = SchemaManager(conn_mgr)
     schema.drop_factor_indexes()
-    logger.info("factor_data 二级索引已删除，memory_limit=16GB，开始批量导入")
+    logger.info(f"factor_data 二级索引已删除，memory_limit={IMPORT_MEMORY_LIMIT}，开始批量导入")
 
     config = LoaderConfig(db_path=db_path, show_progress=False)
     loader = DailyLoader(config)
@@ -429,9 +440,7 @@ def import_special_factors(db_path: str) -> dict[str, int]:
 
     # 导入后：重建索引
     with conn_mgr as conn:
-        conn.execute("SET memory_limit='16GB'")
-        conn.execute("SET threads=4")
-        conn.execute("SET preserve_insertion_order=false")
+        _apply_import_settings(conn)
     schema.recreate_factor_indexes(safe_only=True)
     logger.info("factor_data 二级索引已重建 (safe_only)")
     conn_mgr.close()
@@ -448,7 +457,9 @@ def clean_ohlcv_from_factors(db_path: str):
     try:
         with conn as c:
             for field in ['stock_close', 'stock_open', 'stock_high', 'stock_low', 'stock_volume', 'stock_amount']:
-                deleted = c.execute(f"DELETE FROM factor_data WHERE factor_name = '{field}'").fetchone()
+                deleted = c.execute(
+                    "DELETE FROM factor_data WHERE factor_name = ?", [field]
+                ).fetchone()
                 logger.info(f"  删除 {field}: {deleted} 条")
         logger.info("OHLCV 清理完成")
     finally:

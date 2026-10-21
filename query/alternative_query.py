@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional, List
+from typing import Any, Optional, List
 
 import pandas as pd
+
+from Factor_DB.utils.sql_utils import bind, validate_identifier
 
 from .base import BaseQuery, QueryFilter
 
@@ -52,18 +54,19 @@ class AlternativeQuery(BaseQuery):
         Returns:
             另类数据 DataFrame
         """
-        conditions = [f"data_type = '{data_type}'"]
+        params: dict[str, Any] = {}
+        conditions = [f"data_type = {bind(params, 'data_type', data_type)}"]
 
         if data_subtype:
-            conditions.append(f"data_subtype = '{data_subtype}'")
+            conditions.append(f"data_subtype = {bind(params, 'data_subtype', data_subtype)}")
         if entity_type:
-            conditions.append(f"entity_type = '{entity_type}'")
+            conditions.append(f"entity_type = {bind(params, 'entity_type', entity_type)}")
         if entity_id:
-            conditions.append(f"entity_id = '{entity_id}'")
+            conditions.append(f"entity_id = {bind(params, 'entity_id', entity_id)}")
         if start_date:
-            conditions.append(f"trade_date >= '{start_date}'")
+            conditions.append(f"trade_date >= {bind(params, 'start_date', start_date)}")
         if end_date:
-            conditions.append(f"trade_date <= '{end_date}'")
+            conditions.append(f"trade_date <= {bind(params, 'end_date', end_date)}")
 
         where_clause = ' AND '.join(conditions)
 
@@ -74,7 +77,7 @@ class AlternativeQuery(BaseQuery):
             ORDER BY trade_date
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_data_types(self) -> pd.DataFrame:
         """获取所有数据类型
@@ -96,9 +99,10 @@ class AlternativeQuery(BaseQuery):
         Returns:
             实体列表 DataFrame
         """
-        conditions = [f"data_type = '{data_type}'"]
+        params: dict[str, Any] = {}
+        conditions = [f"data_type = {bind(params, 'data_type', data_type)}"]
         if data_subtype:
-            conditions.append(f"data_subtype = '{data_subtype}'")
+            conditions.append(f"data_subtype = {bind(params, 'data_subtype', data_subtype)}")
 
         where_clause = ' AND '.join(conditions)
 
@@ -109,7 +113,7 @@ class AlternativeQuery(BaseQuery):
             ORDER BY entity_type, entity_id
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_time_series(self, data_type: str,
                        data_subtype: str,
@@ -142,9 +146,10 @@ class AlternativeQuery(BaseQuery):
         Returns:
             最新数据 DataFrame
         """
-        conditions = [f"data_type = '{data_type}'"]
+        params: dict[str, Any] = {}
+        conditions = [f"data_type = {bind(params, 'data_type', data_type)}"]
         if data_subtype:
-            conditions.append(f"data_subtype = '{data_subtype}'")
+            conditions.append(f"data_subtype = {bind(params, 'data_subtype', data_subtype)}")
 
         where_clause = ' AND '.join(conditions)
 
@@ -159,7 +164,7 @@ class AlternativeQuery(BaseQuery):
             ORDER BY entity_id
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_data_stats(self, data_type: str,
                       data_subtype: Optional[str] = None,
@@ -174,11 +179,12 @@ class AlternativeQuery(BaseQuery):
         Returns:
             统计信息 DataFrame
         """
-        conditions = [f"data_type = '{data_type}'"]
+        params: dict[str, Any] = {}
+        conditions = [f"data_type = {bind(params, 'data_type', data_type)}"]
         if data_subtype:
-            conditions.append(f"data_subtype = '{data_subtype}'")
+            conditions.append(f"data_subtype = {bind(params, 'data_subtype', data_subtype)}")
         if entity_id:
-            conditions.append(f"entity_id = '{entity_id}'")
+            conditions.append(f"entity_id = {bind(params, 'entity_id', entity_id)}")
 
         where_clause = ' AND '.join(conditions)
 
@@ -198,7 +204,7 @@ class AlternativeQuery(BaseQuery):
             ORDER BY entity_id
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_correlation_with_price(self, data_type: str,
                                   data_subtype: str,
@@ -219,25 +225,35 @@ class AlternativeQuery(BaseQuery):
         Returns:
             相关系数
         """
+        price_field = validate_identifier(price_field, '价格字段')
+        lag = int(lag)
+
+        params: dict[str, Any] = {
+            'data_type': data_type,
+            'data_subtype': data_subtype,
+            'entity_id': entity_id,
+            'stock_code': stock_code,
+        }
+
         sql = f'''
             WITH alt AS (
                 SELECT trade_date, value
                 FROM alternative_data
-                WHERE data_type = '{data_type}'
-                  AND data_subtype = '{data_subtype}'
-                  AND entity_id = '{entity_id}'
+                WHERE data_type = $data_type
+                  AND data_subtype = $data_subtype
+                  AND entity_id = $entity_id
             ),
             price AS (
                 SELECT trade_date, {price_field}
                 FROM daily_prices
-                WHERE stock_code = '{stock_code}'
+                WHERE stock_code = $stock_code
             )
             SELECT CORR(a.value, p.{price_field}) as correlation
             FROM alt a
             JOIN price p ON a.trade_date = p.trade_date - {lag}
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         if df.empty:
             return 0.0
         return float(df['correlation'].iloc[0])

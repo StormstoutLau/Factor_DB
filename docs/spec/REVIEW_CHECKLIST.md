@@ -82,3 +82,27 @@
 - [x] 现有 7 个迁移测试保持通过（test_migration.py 11 passed）
 - [x] 全量回归 `pytest` 通过（245 passed）
 - [x] DEVLOG / ADR / ARCHITECTURE 同步
+
+---
+
+## 五、本次任务：HIGH 1 / 2 / 3 修复
+
+来源：[Claude 评审核实分析](../reviews/2026-10-claude-audit-analysis.md) · 文档：[调研](../research/high_fixes_research.md) / [设计](../design/high_fixes_design.md) / [实施](../implementation/high_fixes_implementation.md)
+
+### 调研与设计
+- [x] 官方文档证据锚点（DuckDB 命名参数 / 标识符 / 配置；OWASP；Python sqlite3）
+- [x] 学术资料锚点（Halfond & Orso AMNESIA 2005；DVWA 参数化实证）
+- [x] 社区案例（Stack Overflow #77884985；McKinsey Lilli 标识符注入）
+- [x] 幻觉排除记录（证伪 3 条、降级 2 条）
+- [x] 设计文档明确「值参数化 + 标识符白名单」双轨与不能绑定位置
+
+### TDD
+- [x] 红测试先行：`test_sql_safety.py` / 宽表长表输入 / LoaderConfig env
+- [x] `utils/sql_utils.py` + `query/base.py` + 缓存 key
+- [x] 7 个 query 模块参数化
+- [x] loader + config + README
+- [x] `core/schema.py` 迁移/DDL 参数化
+- [x] 脚本路径修复（`financial_factors` + `rglob`）
+- [x] 其余辅助脚本路径环境变量化（`ZHUYI_DATA_PATH` / `LEVEL1_DATA_PATH` / `CSMAR_DATA_PATH` / `LEVEL1_PARQUET_DIR`）
+- [x] 定向测试与全量回归通过（266 passed）
+- [x] DEVLOG / 评审分析文档 / checklist 同步

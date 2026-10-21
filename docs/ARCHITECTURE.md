@@ -66,10 +66,11 @@ Factor_DB/
 │   ├── base.py / pipeline.py / registry.py
 ├── utils/                   # 工具模块
 │   ├── code_utils.py        # normalize_stock_code()
+│   ├── sql_utils.py         # 参数绑定 / 标识符白名单与转义
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（240+ 测试）
+├── tests/                   # 测试套件（266 测试）
 ├── benchmarks/              # 基准测试
 ├── cli.py                   # CLI（7 子命令）
 └── docs/                    # 文档（含 spec/adr）

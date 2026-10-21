@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
+
+from Factor_DB.utils.sql_utils import bind, bind_in, validate_identifier
 
 from .base import BaseQuery
 
@@ -50,11 +52,16 @@ class StockScreener(BaseQuery):
         )
     """
 
-    def _pit_factor_filter(self, trade_date: date, factor_list: str) -> str:
-        """构建 PIT 因子过滤条件"""
+    def _pit_factor_filter(self, trade_date: date, factor_list: str,
+                           params: dict[str, Any]) -> str:
+        """构建 PIT 因子过滤条件（factor_list 为已绑定的占位符列表）"""
         return self._build_pit_subquery(
             'factor_data', ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"trade_date = '{trade_date}' AND factor_name IN ({factor_list})"
+            extra_conditions=(
+                f"trade_date = {bind(params, 'trade_date', trade_date)}"
+                f" AND factor_name IN ({factor_list})"
+            ),
+            params=params
         )
 
     def screen(
@@ -69,43 +76,52 @@ class StockScreener(BaseQuery):
 
         Args:
             trade_date: 选股日期
-            conditions: SQL WHERE 条件列表
-            sort_by: 排序字段
+            conditions: SQL WHERE 条件列表（调用方保证可信；这是原生 SQL 接口，无法参数化）
+            sort_by: 排序字段（白名单校验）
             ascending: 是否升序
             limit: 返回数量限制
 
         Returns:
             选股结果 DataFrame
         """
+        params: dict[str, Any] = {}
+
         # 构建 WHERE 子句
         where_clause = ' AND '.join([f"({c})" for c in conditions])
 
         # PIT 过滤
+        trade_date_param = bind(params, 'trade_date', trade_date)
         pit_filter = self._build_pit_subquery(
             'factor_data', ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"trade_date = '{trade_date}'"
+            extra_conditions=f"trade_date = {trade_date_param}",
+            params=params
         )
 
         # 构建 ORDER BY
         order_clause = ""
         if sort_by:
             direction = "ASC" if ascending else "DESC"
-            order_clause = f"ORDER BY {sort_by} {direction}"
+            order_clause = f"ORDER BY {validate_identifier(sort_by, '排序字段')} {direction}"
 
-        # 构建 LIMIT
-        limit_clause = f"LIMIT {limit}" if limit else ""
+        # 构建 LIMIT（非值绑定场景，校验为正整数后插值）
+        limit_clause = ""
+        if limit:
+            limit = int(limit)
+            if limit <= 0:
+                raise ValueError(f"limit 必须为正整数: {limit}")
+            limit_clause = f"LIMIT {limit}"
 
         sql = f'''
             SELECT stock_code, factor_name, factor_value
             FROM factor_data
-            WHERE trade_date = '{trade_date}'
+            WHERE trade_date = {trade_date_param}
               AND ({where_clause})
               AND {pit_filter}
             {order_clause}
             {limit_clause}
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.info(f"选股完成: {len(df)} 只标的 @ {trade_date}")
         return df
 
@@ -129,17 +145,19 @@ class StockScreener(BaseQuery):
         Returns:
             打分结果 DataFrame
         """
-        factor_names = list(factors.keys())
-        factor_list = ', '.join([f"'{f}'" for f in factor_names])
+        factor_names = [validate_identifier(f, '因子名') for f in factors.keys()]
+        params: dict[str, Any] = {}
+        factor_list = bind_in(params, 'factor', factor_names)
+        trade_date_param = bind(params, 'trade_date', trade_date)
 
         # 股票过滤
         stock_filter = ""
         if stock_codes:
-            codes = ', '.join([f"'{c}'" for c in stock_codes])
+            codes = bind_in(params, 'stock_code', stock_codes)
             stock_filter = f"AND stock_code IN ({codes})"
 
         # PIT 过滤
-        pit_filter = self._pit_factor_filter(trade_date, factor_list)
+        pit_filter = self._pit_factor_filter(trade_date, factor_list, params)
 
         # 构建排名 SQL
         rank_parts = []
@@ -157,6 +175,14 @@ class StockScreener(BaseQuery):
             score_parts.append(f"{factor_name}_rank")
         score_sql = ' + '.join(score_parts)
 
+        # LIMIT 校验（非值绑定场景）
+        limit_clause = ""
+        if limit:
+            limit = int(limit)
+            if limit <= 0:
+                raise ValueError(f"limit 必须为正整数: {limit}")
+            limit_clause = f"LIMIT {limit}"
+
         sql = f'''
             WITH ranked AS (
                 SELECT
@@ -165,7 +191,7 @@ class StockScreener(BaseQuery):
                     factor_value,
                     {ranks_sql}
                 FROM factor_data
-                WHERE trade_date = '{trade_date}'
+                WHERE trade_date = {trade_date_param}
                   AND factor_name IN ({factor_list})
                   {stock_filter}
                   AND {pit_filter}
@@ -180,10 +206,10 @@ class StockScreener(BaseQuery):
             SELECT stock_code, total_score
             FROM scored
             ORDER BY total_score DESC
-            {f"LIMIT {limit}" if limit else ""}
+            {limit_clause}
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.info(f"多因子打分完成: {len(df)} 只标的")
         return df
 
@@ -201,7 +227,8 @@ class StockScreener(BaseQuery):
         Returns:
             行业分布 DataFrame
         """
-        codes = ', '.join([f"'{c}'" for c in stock_codes])
+        params: dict[str, Any] = {}
+        codes = bind_in(params, 'stock_code', stock_codes)
 
         sql = f'''
             SELECT
@@ -214,7 +241,7 @@ class StockScreener(BaseQuery):
             ORDER BY count DESC
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         return df
 
     def get_quantile_stocks(
@@ -237,9 +264,21 @@ class StockScreener(BaseQuery):
         """
         order = "DESC" if top else "ASC"
 
+        # 分位数校验（非值绑定场景）
+        quantile = float(quantile)
+        if not 0 <= quantile <= 1:
+            raise ValueError(f"quantile 必须在 [0, 1] 内: {quantile}")
+
+        params: dict[str, Any] = {}
+        factor_value_param = bind(params, 'factor_name', factor_name)
+        trade_date_param = bind(params, 'trade_date', trade_date)
         pit_filter = self._build_pit_subquery(
             'factor_data', ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"factor_name = '{factor_name}' AND trade_date = '{trade_date}'"
+            extra_conditions=(
+                f"factor_name = {factor_value_param}"
+                f" AND trade_date = {trade_date_param}"
+            ),
+            params=params
         )
 
         sql = f'''
@@ -247,17 +286,17 @@ class StockScreener(BaseQuery):
                 SELECT
                     PERCENTILE_CONT({quantile}) WITHIN GROUP (ORDER BY factor_value {order}) as threshold
                 FROM factor_data
-                WHERE factor_name = '{factor_name}' AND trade_date = '{trade_date}'
+                WHERE factor_name = {factor_value_param} AND trade_date = {trade_date_param}
                   AND {pit_filter}
             )
             SELECT f.stock_code, f.factor_value
             FROM factor_data f, stats s
-            WHERE f.factor_name = '{factor_name}'
-              AND f.trade_date = '{trade_date}'
+            WHERE f.factor_name = {factor_value_param}
+              AND f.trade_date = {trade_date_param}
               AND {pit_filter}
               AND f.factor_value {'>=' if top else '<='} s.threshold
             ORDER BY f.factor_value {order}
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         return df

@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional, List
+from typing import Any, Optional, List
 
 import pandas as pd
+
+from Factor_DB.utils.sql_utils import bind, bind_in
 
 from .base import BaseQuery, QueryFilter
 
@@ -47,18 +49,20 @@ class SentimentQuery(BaseQuery):
             舆情数据 DataFrame
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        stock_param = bind(params, 'stock_code', stock_code)
 
         # DuckDB array contains: use list_position or filter with ANY
         sql = f'''
             SELECT *
             FROM news_sentiment
-            WHERE list_position(related_stocks, '{stock_code}') > 0
+            WHERE list_position(related_stocks, {stock_param}) > 0
               AND {date_filter}
             ORDER BY publish_date DESC, publish_time DESC
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_sentiment_aggregation(self, stock_codes: Optional[List[str]] = None,
                                  start_date: Optional[date] = None,
@@ -76,7 +80,8 @@ class SentimentQuery(BaseQuery):
             聚合情感数据
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
 
         # 股票过滤 - DuckDB 不支持 UNNEST in WHERE EXISTS with array
         # Use simpler approach: if stock_codes specified, filter after query
@@ -105,13 +110,13 @@ class SentimentQuery(BaseQuery):
             ORDER BY period
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
 
         # 如果指定了股票代码，在 Python 中过滤
         if stock_codes and not df.empty:
             # 需要重新查询带股票过滤的数据
             # 由于 DuckDB 数组过滤限制，使用 ANY 语法
-            codes = ', '.join([f"'{c}'" for c in stock_codes])
+            codes = bind_in(params, 'code', stock_codes)
             sql = f'''
                 SELECT
                     {date_trunc} as period,
@@ -130,7 +135,7 @@ class SentimentQuery(BaseQuery):
                 GROUP BY {date_trunc}
                 ORDER BY period
             '''
-            df = self._execute_query(sql)
+            df = self._execute_query(sql, params)
 
         return df
 
@@ -148,17 +153,19 @@ class SentimentQuery(BaseQuery):
             研报情感数据 DataFrame
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        stock_param = bind(params, 'stock_code', stock_code)
 
         sql = f'''
             SELECT *
             FROM report_sentiment
-            WHERE related_stock = '{stock_code}'
+            WHERE related_stock = {stock_param}
               AND {date_filter}
             ORDER BY publish_date DESC
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_sentiment_stocks(self, sentiment_label: str = 'positive',
                            query_date: Optional[date] = None,
@@ -173,10 +180,13 @@ class SentimentQuery(BaseQuery):
         Returns:
             股票列表 DataFrame
         """
+        params: dict[str, Any] = {}
         if query_date:
-            date_filter = f"publish_date = '{query_date}'"
+            date_filter = f"publish_date = {bind(params, 'query_date', query_date)}"
         else:
             date_filter = "publish_date = (SELECT MAX(publish_date) FROM news_sentiment)"
+
+        label_param = bind(params, 'sentiment_label', sentiment_label)
 
         # DuckDB: UNNEST not supported in SELECT directly
         # Use a two-step approach: first get matching news, then unnest in Python
@@ -184,10 +194,10 @@ class SentimentQuery(BaseQuery):
             SELECT related_stocks, sentiment_score
             FROM news_sentiment
             WHERE {date_filter}
-              AND sentiment_label = '{sentiment_label}'
+              AND sentiment_label = {label_param}
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         if df.empty:
             return pd.DataFrame()
 
@@ -241,7 +251,12 @@ class SentimentQuery(BaseQuery):
             情感趋势 DataFrame
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        stock_param = bind(params, 'stock_code', stock_code)
+        window = int(window)
+        if window <= 0:
+            raise ValueError(f"window 必须为正整数: {window}")
 
         sql = f'''
             WITH daily_sentiment AS (
@@ -249,7 +264,7 @@ class SentimentQuery(BaseQuery):
                     publish_date,
                     AVG(sentiment_score) as daily_avg
                 FROM news_sentiment
-                WHERE list_position(related_stocks, '{stock_code}') > 0
+                WHERE list_position(related_stocks, {stock_param}) > 0
                   AND {date_filter}
                 GROUP BY publish_date
             )
@@ -264,7 +279,7 @@ class SentimentQuery(BaseQuery):
             ORDER BY publish_date
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)
 
     def get_hot_news(self, query_date: Optional[date] = None,
                     limit: int = 20) -> pd.DataFrame:
@@ -277,10 +292,15 @@ class SentimentQuery(BaseQuery):
         Returns:
             热门新闻 DataFrame
         """
+        params: dict[str, Any] = {}
         if query_date:
-            date_filter = f"publish_date = '{query_date}'"
+            date_filter = f"publish_date = {bind(params, 'query_date', query_date)}"
         else:
             date_filter = "publish_date = (SELECT MAX(publish_date) FROM news_sentiment)"
+
+        limit = int(limit)
+        if limit <= 0:
+            raise ValueError(f"limit 必须为正整数: {limit}")
 
         sql = f'''
             SELECT *
@@ -290,4 +310,4 @@ class SentimentQuery(BaseQuery):
             LIMIT {limit}
         '''
 
-        return self._execute_query(sql)
+        return self._execute_query(sql, params)

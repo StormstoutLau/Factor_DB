@@ -1,7 +1,8 @@
 """
 Phase 3: CSMAR 因子数据全量导入脚本
 
-将 E:\因子研究 下的所有 CSMAR 因子数据导入到 factor_data 表。
+将 CSMAR 因子数据目录下的所有数据导入到 factor_data 表。
+默认路径 E:\因子研究，可用 CSMAR_DATA_PATH 覆盖。
 
 用法:
     python scripts/import_phase3_csmar.py
@@ -13,19 +14,20 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from loaders.base import LoaderConfig
 from loaders.csmar_loader import CSMARLoader
 
 logger = logging.getLogger(__name__)
 
-CSMAR_ROOT = Path(r'E:\因子研究')
+CSMAR_ROOT = Path(os.getenv('CSMAR_DATA_PATH', r'E:\因子研究'))
 
 
 def init_database(db_path: str) -> bool:

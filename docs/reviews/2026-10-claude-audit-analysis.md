@@ -29,7 +29,7 @@
 
 **前提**：迁移从未在生产库执行（`factor_data` 仍为 16.8 亿行实体表），属"执行前必须修复"的阻断项，尚未造成实际损失。
 
-### HIGH 1 — SQL f-string 拼接：✅ 成立（严重度重校准为 P1 健壮性）
+### HIGH 1 — SQL f-string 拼接：✅ 成立（严重度重校准为 P1 健壮性）→ 已修复
 
 | 位置 | 内容 |
 |------|------|
@@ -41,7 +41,7 @@
 `connection.execute` 已支持 parameters（`core/connection.py#L109-L122`）但几乎未使用。
 **校准**：本地单机研究库无 Web 攻击面，"注入"威胁被高估；真正现实故障是因子名含引号导致语法错误（CSMAR 文件名来源）。建议按"值参数绑定 + 标识符白名单转义"作为 P1 健壮性修复，无需单开安全审计。
 
-### HIGH 2 — README 示例与 `load_factor_to_wide` 输入格式相反：✅ 成立
+### HIGH 2 — README 示例与 `load_factor_to_wide` 输入格式相反：✅ 成立 → 已修复
 
 - README 传长表：`README.md#L100-L107`
 - 函数要求宽矩阵（index=日期，columns=股票代码）：`loaders/daily_loader.py#L403-L405`
@@ -50,7 +50,7 @@
 
 评审推演正确：产生两个同名 `trade_date` 列 + UNPIVOT 失败，且用户看到返回 0 误以为成功。修复需改 README + 入口格式校验抛异常。
 
-### HIGH 3 — 硬编码路径与内存：✅ 成立，且评审有遗漏
+### HIGH 3 — 硬编码路径与内存：✅ 成立，且评审有遗漏 → 已修复
 
 - `loaders/daily_loader.py#L49-L54`：`20GB` + `F:\Coding\Factor_DB\...tmp`
 - `loaders/daily_loader.py#L440-L441`：二次写死 20GB
@@ -112,3 +112,14 @@
 - 完整性：遗漏 4 个同类风险
 - 严重度判断：整体合理；仅 SQL 注入一项对本地单机库偏高
 - **结论：评审可信度高，可直接作为 P0/P1 修复依据**
+
+## 五、修复落地
+
+| 项 | 状态 | 落地内容 | 验证 |
+|----|------|---------|------|
+| CRITICAL（迁移安全） | ✅ 已提交 `30f8929` | `MigrationError` + fail-fast + 单因子事务 + 行数对账 + RENAME 备份 | ADR-0008；245 passed |
+| HIGH 1（SQL 拼接） | ✅ 已修复 | `utils/sql_utils.py` + 7 个查询模块命名参数 + schema 迁移/DDL 白名单转义 | `test_sql_safety.py`；266 passed |
+| HIGH 2（README / 宽表入口） | ✅ 已修复 | README 宽矩阵示例；长表/空表/非法名 → `ValueError` | `test_wide_loader.py` 3 项 |
+| HIGH 3（硬编码） | ✅ 已修复 | `LoaderConfig` env 化；脚本 `ASHARE_DATA_PATH` + `financial_factors` + `rglob`；辅助脚本路径全部 env 化 | `TestLoaderConfigEnv`；101 因子文件可发现 |
+
+详见 [调研](../research/high_fixes_research.md) / [设计](../design/high_fixes_design.md) / [实施](../implementation/high_fixes_implementation.md)。

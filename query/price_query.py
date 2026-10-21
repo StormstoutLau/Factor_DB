@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 from datetime import date, time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
+
+from Factor_DB.utils.sql_utils import bind, escape_literal
 
 from .base import BaseQuery, QueryFilter
 
@@ -104,12 +106,14 @@ class PriceQuery(BaseQuery):
         default_fields = ['trade_date', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount']
         select_fields = self._build_field_selector(filter, default_fields)
 
-        date_filter = self._build_date_filter(filter)
-        stock_filter = self._build_stock_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        stock_filter = self._build_stock_filter(filter, params)
         pit_filter = self._build_pit_subquery(
             'daily_prices', ['trade_date', 'stock_code'],
             as_of=filter.as_of,
-            non_null_columns=['close']
+            non_null_columns=['close'],
+            params=params
         )
 
         sql = f'''
@@ -119,7 +123,7 @@ class PriceQuery(BaseQuery):
             ORDER BY trade_date, stock_code
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.debug(f"日 K 查询完成: {len(df)} 条记录")
         return df
 
@@ -156,25 +160,30 @@ class PriceQuery(BaseQuery):
         default_fields = ['trade_date', 'trade_time', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount']
         select_fields = self._build_field_selector(filter, default_fields)
 
-        date_filter = self._build_date_filter(filter)
-        stock_filter = self._build_stock_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        stock_filter = self._build_stock_filter(filter, params)
 
         time_conditions = []
         if start_time:
-            time_conditions.append(f"trade_time >= '{start_time}'")
+            time_conditions.append(
+                f"trade_time >= CAST({bind(params, 'start_time', start_time.isoformat())} AS TIME)"
+            )
         if end_time:
-            time_conditions.append(f"trade_time <= '{end_time}'")
+            time_conditions.append(
+                f"trade_time <= CAST({bind(params, 'end_time', end_time.isoformat())} AS TIME)"
+            )
         time_filter = ' AND '.join(time_conditions) if time_conditions else '1=1'
 
         if self._use_parquet_level1():
             parquet_glob = str(self.level1_parquet_dir / '*/data.parquet')
             sql = f'''
                 SELECT {select_fields}
-                FROM read_parquet('{parquet_glob}', hive_partitioning=true)
+                FROM read_parquet({escape_literal(parquet_glob)}, hive_partitioning=true)
                 WHERE {date_filter} AND {stock_filter} AND {time_filter}
                 ORDER BY trade_date, trade_time, stock_code
             '''
-            df = self._execute_query(sql)
+            df = self._execute_query(sql, params)
             logger.debug(f"Level 1 Parquet 查询完成: {len(df)} 条记录")
             return df
 
@@ -185,7 +194,7 @@ class PriceQuery(BaseQuery):
             ORDER BY trade_date, trade_time, stock_code
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.debug(f"Level 1 查询完成: {len(df)} 条记录")
         return df
 
@@ -219,16 +228,18 @@ class PriceQuery(BaseQuery):
             raise ValueError(f"无效字段: {field}，可选: {valid_fields}")
 
         # 构建过滤条件
+        params: dict[str, Any] = {}
         date_filter = self._build_date_filter(
-            QueryFilter(start_date=start_date, end_date=end_date)
+            QueryFilter(start_date=start_date, end_date=end_date), params
         )
         stock_filter = self._build_stock_filter(
-            QueryFilter(stock_codes=stock_codes)
+            QueryFilter(stock_codes=stock_codes), params
         )
         pit_filter = self._build_pit_subquery(
             'daily_prices', ['trade_date', 'stock_code'],
             as_of=as_of,
-            non_null_columns=[field]
+            non_null_columns=[field],
+            params=params
         )
 
         # 复权处理
@@ -241,7 +252,7 @@ class PriceQuery(BaseQuery):
             ORDER BY trade_date, stock_code
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
 
         # 转为宽格式矩阵
         if df.empty:
@@ -265,8 +276,9 @@ class PriceQuery(BaseQuery):
         Returns:
             交易日列表
         """
+        params: dict[str, Any] = {}
         date_filter = self._build_date_filter(
-            QueryFilter(start_date=start_date, end_date=end_date)
+            QueryFilter(start_date=start_date, end_date=end_date), params
         )
 
         sql = f'''
@@ -276,7 +288,7 @@ class PriceQuery(BaseQuery):
             ORDER BY trade_date
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         return df['trade_date'].tolist()
 
     def get_stock_list(
@@ -294,9 +306,10 @@ class PriceQuery(BaseQuery):
             股票代码列表
         """
         conditions = ['1=1']
+        params: dict[str, Any] = {}
 
         if industry:
-            conditions.append(f"industry = '{industry}'")
+            conditions.append(f"industry = {bind(params, 'industry', industry)}")
 
         where_clause = ' AND '.join(conditions)
 
@@ -307,7 +320,7 @@ class PriceQuery(BaseQuery):
             ORDER BY stock_code
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         return df['stock_code'].tolist()
 
     def get_date_range(self) -> tuple[Optional[date], Optional[date]]:

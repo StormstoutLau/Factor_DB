@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
+
+from Factor_DB.utils.sql_utils import bind, bind_in, quote_identifier
 
 from .base import BaseQuery, QueryFilter
 
@@ -120,23 +122,25 @@ class FactorQuery(BaseQuery):
             as_of=as_of
         )
 
-        date_filter = self._build_date_filter(filter)
-        stock_filter = self._build_stock_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        stock_filter = self._build_stock_filter(filter, params)
 
         if as_of is None and self._factor_in_wide(factor_name):
+            factor_col = quote_identifier(factor_name)
             sql = f'''
                 SELECT
                     trade_date,
                     stock_code,
-                    '{factor_name}' AS factor_name,
-                    "{factor_name}" AS factor_value
+                    {bind(params, 'factor_name', factor_name)} AS factor_name,
+                    {factor_col} AS factor_value
                 FROM factor_wide
                 WHERE {date_filter}
                   AND {stock_filter}
-                  AND "{factor_name}" IS NOT NULL
+                  AND {factor_col} IS NOT NULL
                 ORDER BY trade_date, stock_code
             '''
-            df = self._execute_query(sql)
+            df = self._execute_query(sql, params)
             logger.debug(f"宽表因子查询完成: {factor_name}, {len(df)} 条记录")
             return df
 
@@ -146,23 +150,25 @@ class FactorQuery(BaseQuery):
 
         table = self._history_table if (as_of is not None and self._history_table) else 'factor_data'
 
+        factor_value_param = bind(params, 'factor_name', factor_name)
         pit_filter = self._build_pit_subquery(
             table, ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"factor_name = '{factor_name}'",
-            as_of=filter.as_of
+            extra_conditions=f"factor_name = {factor_value_param}",
+            as_of=filter.as_of,
+            params=params
         )
 
         sql = f'''
             SELECT trade_date, stock_code, factor_name, factor_value
-            FROM {table}
-            WHERE factor_name = '{factor_name}'
+            FROM {quote_identifier(table)}
+            WHERE factor_name = {factor_value_param}
               AND {date_filter}
               AND {stock_filter}
               AND {pit_filter}
             ORDER BY trade_date, stock_code
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.debug(f"因子查询完成: {factor_name}, {len(df)} 条记录")
         return df
 
@@ -184,36 +190,42 @@ class FactorQuery(BaseQuery):
         Returns:
             截面数据 DataFrame (stock_code, factor_value)
         """
+        params: dict[str, Any] = {}
+        trade_date_param = bind(params, 'trade_date', trade_date)
+
         if as_of is None and self._factor_in_wide(factor_name):
+            factor_col = quote_identifier(factor_name)
             sql = f'''
-                SELECT stock_code, "{factor_name}" AS factor_value
+                SELECT stock_code, {factor_col} AS factor_value
                 FROM factor_wide
-                WHERE trade_date = '{trade_date}'
-                  AND "{factor_name}" IS NOT NULL
+                WHERE trade_date = {trade_date_param}
+                  AND {factor_col} IS NOT NULL
                 ORDER BY factor_value DESC
             '''
-            df = self._execute_query(sql)
+            df = self._execute_query(sql, params)
             logger.debug(f"宽表截面查询完成: {factor_name} @ {trade_date}, {len(df)} 条记录")
             return df
 
         table = self._history_table if (as_of is not None and self._history_table) else 'factor_data'
 
+        factor_value_param = bind(params, 'factor_name', factor_name)
         pit_filter = self._build_pit_subquery(
             table, ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"factor_name = '{factor_name}' AND trade_date = '{trade_date}'",
-            as_of=as_of
+            extra_conditions=f"factor_name = {factor_value_param} AND trade_date = {trade_date_param}",
+            as_of=as_of,
+            params=params
         )
 
         sql = f'''
             SELECT stock_code, factor_value
-            FROM {table}
-            WHERE factor_name = '{factor_name}'
-              AND trade_date = '{trade_date}'
+            FROM {quote_identifier(table)}
+            WHERE factor_name = {factor_value_param}
+              AND trade_date = {trade_date_param}
               AND {pit_filter}
             ORDER BY factor_value DESC
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.debug(f"截面查询完成: {factor_name} @ {trade_date}, {len(df)} 条记录")
         return df
 
@@ -246,11 +258,12 @@ class FactorQuery(BaseQuery):
             as_of=as_of
         )
 
-        date_filter = self._build_date_filter(filter)
-        stock_filter = self._build_stock_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        stock_filter = self._build_stock_filter(filter, params)
 
         if as_of is None and self._all_factors_in_wide(factor_names):
-            cols = ', '.join([f'"{f}"' for f in factor_names])
+            cols = ', '.join(quote_identifier(f) for f in factor_names)
             sql = f'''
                 SELECT trade_date, stock_code, {cols}
                 FROM factor_wide
@@ -258,22 +271,23 @@ class FactorQuery(BaseQuery):
                   AND {stock_filter}
                 ORDER BY trade_date, stock_code
             '''
-            df = self._execute_query(sql)
+            df = self._execute_query(sql, params)
             logger.debug(f"宽表因子矩阵: {df.shape}")
             return df
 
         table = self._history_table if (as_of is not None and self._history_table) else 'factor_data'
 
-        factor_list = ', '.join([f"'{f}'" for f in factor_names])
+        factor_list = bind_in(params, 'factor', factor_names)
         pit_filter = self._build_pit_subquery(
             table, ['trade_date', 'stock_code', 'factor_name'],
             extra_conditions=f"factor_name IN ({factor_list})",
-            as_of=filter.as_of
+            as_of=filter.as_of,
+            params=params
         )
 
         sql = f'''
             SELECT trade_date, stock_code, factor_name, factor_value
-            FROM {table}
+            FROM {quote_identifier(table)}
             WHERE factor_name IN ({factor_list})
               AND {date_filter}
               AND {stock_filter}
@@ -281,7 +295,7 @@ class FactorQuery(BaseQuery):
             ORDER BY trade_date, stock_code, factor_name
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
 
         if df.empty:
             return pd.DataFrame()
@@ -309,10 +323,16 @@ class FactorQuery(BaseQuery):
         Returns:
             统计信息字典
         """
-        date_condition = f"AND trade_date = '{trade_date}'" if trade_date else ""
+        params: dict[str, Any] = {}
+        factor_value_param = bind(params, 'factor_name', factor_name)
+        date_condition = (
+            f"AND trade_date = {bind(params, 'stat_date', trade_date)}"
+            if trade_date else ""
+        )
         pit_filter = self._build_pit_subquery(
             'factor_data', ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"factor_name = '{factor_name}' {date_condition}"
+            extra_conditions=f"factor_name = {factor_value_param} {date_condition}",
+            params=params
         )
 
         sql = f'''
@@ -324,11 +344,11 @@ class FactorQuery(BaseQuery):
                 MAX(factor_value) as max,
                 MEDIAN(factor_value) as median
             FROM factor_data
-            WHERE factor_name = '{factor_name}'
+            WHERE factor_name = {factor_value_param}
               AND {pit_filter}
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
 
         if df.empty:
             return {}
@@ -363,10 +383,21 @@ class FactorQuery(BaseQuery):
             IC 序列 DataFrame (trade_date, ic)
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        # 自连接 daily_prices 的上下文需要限定别名，避免 trade_date 歧义
+        joined_conditions = []
+        if start_date:
+            joined_conditions.append(f"a.trade_date >= {bind(params, 'start_date', start_date)}")
+        if end_date:
+            joined_conditions.append(f"a.trade_date <= {bind(params, 'end_date', end_date)}")
+        joined_date_filter = ' AND '.join(joined_conditions) if joined_conditions else '1=1'
+
+        factor_value_param = bind(params, 'factor_name', factor_name)
         factor_pit_filter = self._build_pit_subquery(
             'factor_data', ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"factor_name = '{factor_name}' AND {date_filter}"
+            extra_conditions=f"factor_name = {factor_value_param} AND {date_filter}",
+            params=params
         )
 
         sql = f'''
@@ -377,7 +408,7 @@ class FactorQuery(BaseQuery):
                     factor_value,
                     RANK() OVER (PARTITION BY trade_date ORDER BY factor_value) as factor_rank
                 FROM factor_data
-                WHERE factor_name = '{factor_name}' AND {date_filter} AND {factor_pit_filter}
+                WHERE factor_name = {factor_value_param} AND {date_filter} AND {factor_pit_filter}
             ),
             return_rank AS (
                 SELECT
@@ -388,7 +419,7 @@ class FactorQuery(BaseQuery):
                 JOIN daily_prices b
                     ON a.stock_code = b.stock_code
                     AND b.trade_date = (SELECT MIN(trade_date) FROM daily_prices WHERE trade_date > a.trade_date)
-                WHERE {date_filter}
+                WHERE {joined_date_filter}
                   AND (a.trade_date, a.stock_code, a.loaded_at) IN (
                       SELECT trade_date, stock_code, MAX(loaded_at)
                       FROM daily_prices
@@ -412,7 +443,7 @@ class FactorQuery(BaseQuery):
             ORDER BY f.trade_date
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         logger.debug(f"IC 计算完成: {factor_name}, {len(df)} 期")
         return df
 
@@ -452,10 +483,13 @@ class FactorQuery(BaseQuery):
             覆盖率 DataFrame (trade_date, coverage_ratio)
         """
         filter = QueryFilter(start_date=start_date, end_date=end_date)
-        date_filter = self._build_date_filter(filter)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+        factor_value_param = bind(params, 'factor_name', factor_name)
         factor_pit_filter = self._build_pit_subquery(
             'factor_data', ['trade_date', 'stock_code', 'factor_name'],
-            extra_conditions=f"factor_name = '{factor_name}' AND {date_filter}"
+            extra_conditions=f"factor_name = {factor_value_param} AND {date_filter}",
+            params=params
         )
         price_pit_filter = self._build_pit_subquery(
             'daily_prices', ['trade_date', 'stock_code']
@@ -471,7 +505,7 @@ class FactorQuery(BaseQuery):
             factor_stocks AS (
                 SELECT trade_date, COUNT(DISTINCT stock_code) as cnt
                 FROM factor_data
-                WHERE factor_name = '{factor_name}' AND {date_filter} AND {factor_pit_filter}
+                WHERE factor_name = {factor_value_param} AND {date_filter} AND {factor_pit_filter}
                 GROUP BY trade_date
             )
             SELECT
@@ -482,5 +516,5 @@ class FactorQuery(BaseQuery):
             ORDER BY t.trade_date
         '''
 
-        df = self._execute_query(sql)
+        df = self._execute_query(sql, params)
         return df

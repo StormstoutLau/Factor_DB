@@ -64,7 +64,7 @@ Factor_DB/
 │   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
 │   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
 │   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
-├── tests/                       # Test Suite (240 tests, all passing)
+├── tests/                       # Test Suite (266 tests, all passing)
 ├── benchmarks/                  # Performance Benchmarks
 ├── docs/                        # Documentation
 └── cli.py                       # CLI Entry Point
@@ -92,20 +92,24 @@ schema.init_database()  # Create all tables and indexes
 ### Load Factor Data (Wide Table Architecture)
 
 ```python
-from loaders.daily_loader import DailyLoader
 import pandas as pd
+from loaders.daily_loader import DailyLoader
 
 loader = DailyLoader()
 
-# Load factor into wide table (auto-creates column if needed)
-df = pd.DataFrame({
-    'trade_date': ['2024-01-02', '2024-01-02'],
-    'stock_code': ['000001', '000002'],
-    'factor_value': [15.3, 22.1],
-})
+# IMPORTANT: input must be a WIDE matrix:
+#   index = trade dates, columns = stock codes
+df = pd.DataFrame(
+    [[15.3, 22.1],
+     [16.0, 23.4]],
+    index=pd.to_datetime(['2024-01-02', '2024-01-03']),
+    columns=['000001', '000002'],
+)
 count = loader.load_factor_to_wide(df, factor_name='PE_ratio')
 print(f"Loaded {count} rows into factor_wide")
 ```
+
+> Long-format input (`trade_date` / `stock_code` / `factor_value` columns) is rejected with `ValueError`.
 
 ### Load Daily Price Data
 
@@ -328,7 +332,7 @@ DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions 
 python -m pytest tests/ -v
 ```
 
-**240 tests, all passing.** Coverage includes:
+**266 tests, all passing.** Coverage includes:
 
 | Test Suite | Tests | What's Covered |
 |-----------|-------|----------------|

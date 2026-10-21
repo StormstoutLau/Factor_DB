@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from core.connection import DuckDBConnection
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.utils.sql_utils import bind, bind_in
+
 from .base import BaseQuery
 
 logger = logging.getLogger(__name__)
@@ -47,25 +49,25 @@ class OSINTQuery(BaseQuery):
         Returns:
             DataFrame
         """
-        conditions = ["source_id = ?"]
-        params = [source_id]
-
+        params: dict[str, Any] = {'source_id': source_id}
+        conditions = ["source_id = $source_id"]
         if start_date:
-            conditions.append("trade_date >= ?")
-            params.append(start_date)
+            params['start_date'] = start_date
+            conditions.append("trade_date >= $start_date")
         if end_date:
-            conditions.append("trade_date <= ?")
-            params.append(end_date)
+            params['end_date'] = end_date
+            conditions.append("trade_date <= $end_date")
 
         where_clause = " AND ".join(conditions)
 
         try:
             with self.conn as conn:
+                # UNION ALL 两处复用同一组命名参数；投影列保持两表一致
                 df = conn.execute(f"""
-                    SELECT *, 'macro_data' AS _source_table FROM macro_data
+                    SELECT trade_date, source_id, value, 'macro_data' AS _source_table FROM macro_data
                     WHERE {where_clause}
                     UNION ALL
-                    SELECT *, 'alternative_data' AS _source_table FROM alternative_data
+                    SELECT trade_date, source_id, value, 'alternative_data' AS _source_table FROM alternative_data
                     WHERE {where_clause}
                     ORDER BY trade_date DESC
                 """, params).fetchdf()
@@ -85,15 +87,18 @@ class OSINTQuery(BaseQuery):
         Returns:
             DataFrame
         """
+        params: dict[str, Any] = {}
         conditions = []
-        params = []
 
         if indicator_ids:
-            placeholders = ",".join(["?"] * len(indicator_ids))
+            placeholders = bind_in(params, 'indicator', indicator_ids)
             conditions.append(f"indicator_id IN ({placeholders})")
-            params.extend(indicator_ids)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
+        limit = int(limit)
+        if limit <= 0:
+            raise ValueError(f"limit 必须为正整数: {limit}")
+        params['limit'] = limit
 
         try:
             with self.conn as conn:
@@ -103,8 +108,8 @@ class OSINTQuery(BaseQuery):
                     LEFT JOIN macro_indicators mi ON m.indicator_id = mi.indicator_id
                     WHERE {where_clause}
                     ORDER BY m.trade_date DESC
-                    LIMIT ?
-                """, params + [limit]).fetchdf()
+                    LIMIT $limit
+                """, params).fetchdf()
             return df
         except Exception as e:
             logger.error(f"获取最新宏观数据失败: {e}")
@@ -125,21 +130,23 @@ class OSINTQuery(BaseQuery):
         """
         try:
             with self.conn as conn:
-                macro_df = conn.execute("""
+                params: dict[str, Any] = {}
+                placeholders = bind_in(params, 'indicator', indicator_ids)
+                macro_df = conn.execute(f"""
                     SELECT trade_date, indicator_id, value
                     FROM macro_data
-                    WHERE indicator_id IN ({})
+                    WHERE indicator_id IN ({placeholders})
                     AND value_type = 'raw'
                     ORDER BY trade_date
-                """.format(",".join(["?"] * len(indicator_ids))), indicator_ids).fetchdf()
+                """, params).fetchdf()
 
                 if stock_code and not macro_df.empty:
                     factor_df = conn.execute("""
                         SELECT trade_date, factor_name, factor_value
                         FROM factor_data
-                        WHERE stock_code = ?
+                        WHERE stock_code = $stock_code
                         ORDER BY trade_date
-                    """, [stock_code]).fetchdf()
+                    """, {'stock_code': stock_code}).fetchdf()
 
                     if not factor_df.empty:
                         macro_pivot = macro_df.pivot_table(

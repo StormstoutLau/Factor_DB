@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from loaders.base import LoaderConfig
 from loaders.daily_loader import DailyLoader
 
@@ -258,6 +258,28 @@ class TestWideFactorLoader(unittest.TestCase):
         df = self._make_factor_df(n_dates=3, n_stocks=5)
         rows = self.loader.load_factor_to_wide(df, 'pe')
         self.assertEqual(rows, 15)  # 3 × 5
+
+
+    # ========== 6. 入口格式校验（HIGH 2） ==========
+
+    def test_rejects_long_format(self):
+        """长表输入应抛 ValueError（README 曾错误示例为长表）"""
+        df_long = pd.DataFrame({
+            'trade_date': ['2024-01-02', '2024-01-02'],
+            'stock_code': ['000001', '000002'],
+            'factor_value': [15.3, 22.1],
+        })
+        with self.assertRaises(ValueError):
+            self.loader.load_factor_to_wide(df_long, 'pe')
+
+    def test_rejects_empty_dataframe(self):
+        with self.assertRaises(ValueError):
+            self.loader.load_factor_to_wide(pd.DataFrame(), 'pe')
+
+    def test_rejects_invalid_factor_name(self):
+        df = self._make_factor_df()
+        with self.assertRaises(ValueError):
+            self.loader.load_factor_to_wide(df, 'bad name; DROP TABLE factor_wide')
 
 
 if __name__ == '__main__':

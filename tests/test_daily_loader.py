@@ -9,12 +9,13 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from loaders.base import LoaderConfig
 from loaders.daily_loader import DailyLoader
 
@@ -393,6 +394,45 @@ class TestDailyLoader(unittest.TestCase):
         finally:
             pass
         loader.conn.close()
+
+
+class TestLoaderConfigEnv(unittest.TestCase):
+    """LoaderConfig 环境变量与默认值（HIGH 3）"""
+
+    _ENV_KEYS = (
+        'FACTOR_DB_MEMORY_LIMIT',
+        'FACTOR_DB_THREADS',
+        'FACTOR_DB_TEMP_DIR',
+    )
+
+    def _clean_env(self):
+        return {k: v for k, v in os.environ.items() if k not in self._ENV_KEYS}
+
+    def test_defaults(self):
+        with mock.patch.dict(os.environ, self._clean_env(), clear=True):
+            cfg = LoaderConfig(db_path='my.db')
+        self.assertEqual(cfg.memory_limit, '20GB')
+        self.assertEqual(cfg.threads, 4)
+        self.assertEqual(cfg.temp_directory, 'my.db.tmp')
+        self.assertFalse(cfg.preserve_insertion_order)
+
+    def test_env_overrides(self):
+        env = {
+            'FACTOR_DB_MEMORY_LIMIT': '8GB',
+            'FACTOR_DB_THREADS': '2',
+            'FACTOR_DB_TEMP_DIR': 'D:/duckdb_tmp',
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            cfg = LoaderConfig(db_path='my.db')
+        self.assertEqual(cfg.memory_limit, '8GB')
+        self.assertEqual(cfg.threads, 2)
+        self.assertEqual(cfg.temp_directory, 'D:/duckdb_tmp')
+
+    def test_explicit_values_beat_env(self):
+        with mock.patch.dict(os.environ, {'FACTOR_DB_MEMORY_LIMIT': '8GB'}, clear=False):
+            cfg = LoaderConfig(db_path='my.db', memory_limit='4GB', threads=1)
+        self.assertEqual(cfg.memory_limit, '4GB')
+        self.assertEqual(cfg.threads, 1)
 
 
 if __name__ == '__main__':

@@ -113,7 +113,7 @@ class Config:
 
         if 'loader' in data:
             loader_data = data['loader']
-            config.loader = LoaderConfig(
+            config.loader = AppLoaderConfig(
                 batch_size=loader_data.get('batch_size', config.loader.batch_size),
                 skip_existing=loader_data.get('skip_existing', config.loader.skip_existing),
                 validate_data=loader_data.get('validate_data', config.loader.validate_data),
