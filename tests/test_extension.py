@@ -12,9 +12,9 @@ from datetime import date
 import pandas as pd
 import numpy as np
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
-from core.metadata_manager import MetadataManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
+from Factor_DB.core.metadata_manager import MetadataManager
 from loaders.base import LoaderConfig
 from loaders.macro_loader import MacroLoader
 from loaders.news_loader import NewsLoader

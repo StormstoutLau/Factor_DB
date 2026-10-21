@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from datetime import date
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from query.price_query import PriceQuery
 from query.factor_query import FactorQuery
 from query.screen import StockScreener

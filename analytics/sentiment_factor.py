@@ -16,8 +16,8 @@ from typing import Optional, List
 import pandas as pd
 import numpy as np
 
-from query.sentiment_query import SentimentQuery
-from query.factor_query import FactorQuery
+from Factor_DB.query.sentiment_query import SentimentQuery
+from Factor_DB.query.factor_query import FactorQuery
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ import pyarrow.feather as feather
 from tqdm import tqdm
 
 from .base import BaseLoader, LoaderConfig
-from utils.code_utils import normalize_stock_code
+from Factor_DB.utils.code_utils import normalize_stock_code
 
 logger = logging.getLogger(__name__)
 

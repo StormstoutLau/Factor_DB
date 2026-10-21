@@ -8,8 +8,8 @@ import os
 import tempfile
 import unittest
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 
 
 class TestSchemaManager(unittest.TestCase):

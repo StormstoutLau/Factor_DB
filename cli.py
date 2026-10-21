@@ -23,8 +23,8 @@ from pathlib import Path
 
 def cmd_init(args):
     """初始化数据库"""
-    from core.connection import DuckDBConnection
-    from core.schema import SchemaManager
+    from Factor_DB.core.connection import DuckDBConnection
+    from Factor_DB.core.schema import SchemaManager
 
     conn = DuckDBConnection(args.db)
     schema = SchemaManager(conn)
@@ -38,7 +38,7 @@ def cmd_init(args):
 
 def cmd_stats(args):
     """显示数据库概览"""
-    from core.connection import DuckDBConnection
+    from Factor_DB.core.connection import DuckDBConnection
 
     conn = DuckDBConnection(args.db, read_only=True)
     with conn as c:
@@ -57,8 +57,8 @@ def cmd_stats(args):
 
 def cmd_load(args):
     """加载数据"""
-    from loaders.base import LoaderConfig
-    from loaders.daily_loader import DailyLoader
+    from Factor_DB.loaders.base import LoaderConfig
+    from Factor_DB.loaders.daily_loader import DailyLoader
 
     config = LoaderConfig(db_path=args.db, show_progress=True)
     data_path = Path(args.path)
@@ -69,7 +69,7 @@ def cmd_load(args):
             print(f"日K数据加载完成: {total} 行")
     elif args.type == 'level1':
         try:
-            from loaders.level1_loader import Level1Loader
+            from Factor_DB.loaders.level1_loader import Level1Loader
             with Level1Loader(config) as loader:
                 total = loader.load(data_path)
                 print(f"Level1数据加载完成: {total} 行")
@@ -83,7 +83,7 @@ def cmd_load(args):
 
 def cmd_query(args):
     """执行 SQL 查询"""
-    from core.connection import DuckDBConnection
+    from Factor_DB.core.connection import DuckDBConnection
 
     conn = DuckDBConnection(args.db, read_only=True)
     with conn as c:
@@ -94,7 +94,7 @@ def cmd_query(args):
 
 def cmd_list_factors(args):
     """列出所有因子"""
-    from core.connection import DuckDBConnection
+    from Factor_DB.core.connection import DuckDBConnection
 
     conn = DuckDBConnection(args.db, read_only=True)
     with conn as c:
@@ -116,8 +116,8 @@ def cmd_cache_clear(args):
 
 def cmd_compact(args):
     """清理数据库旧版本数据"""
-    from core.connection import DuckDBConnection
-    from core.schema import SchemaManager
+    from Factor_DB.core.connection import DuckDBConnection
+    from Factor_DB.core.schema import SchemaManager
 
     conn = DuckDBConnection(args.db)
     schema = SchemaManager(conn)

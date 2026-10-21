@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.feather as feather
 
-from core.connection import DuckDBConnection
+from Factor_DB.core.connection import DuckDBConnection
 
 
 class TestLevel1ParquetConversion(unittest.TestCase):

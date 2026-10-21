@@ -10,8 +10,8 @@ from datetime import date
 
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from osint.base import BaseCollector, CollectorConfig, OSINTEvent, OSINTEventType
 from osint.registry import CollectorRegistry
 from osint.pipeline import OSINTPipeline

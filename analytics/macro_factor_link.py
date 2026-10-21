@@ -16,8 +16,8 @@ from typing import Optional, List, Dict
 import pandas as pd
 import numpy as np
 
-from query.macro_query import MacroQuery
-from query.factor_query import FactorQuery
+from Factor_DB.query.macro_query import MacroQuery
+from Factor_DB.query.factor_query import FactorQuery
 
 logger = logging.getLogger(__name__)
 

@@ -21,9 +21,9 @@ from typing import Optional
 
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from loaders.base import BaseLoader, LoaderConfig
-from utils.code_utils import normalize_stock_code
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.loaders.base import BaseLoader, LoaderConfig
+from Factor_DB.utils.code_utils import normalize_stock_code
 
 logger = logging.getLogger(__name__)
 

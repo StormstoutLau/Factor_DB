@@ -9,8 +9,8 @@ from datetime import date
 
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from query.cache import QueryCache
 from query.price_query import PriceQuery
 

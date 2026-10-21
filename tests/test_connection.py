@@ -10,7 +10,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from core.connection import DuckDBConnection
+from Factor_DB.core.connection import DuckDBConnection
 
 
 class TestDuckDBConnection(unittest.TestCase):

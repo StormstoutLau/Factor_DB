@@ -16,7 +16,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from core.connection import DuckDBConnection
+from Factor_DB.core.connection import DuckDBConnection
 from loaders.daily_loader import DailyLoader
 from loaders.base import LoaderConfig
 from query.factor_query import FactorQuery

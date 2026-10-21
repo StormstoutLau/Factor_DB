@@ -11,8 +11,8 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 
 
 class TestPITSchema(unittest.TestCase):

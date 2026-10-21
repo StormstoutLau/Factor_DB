@@ -17,7 +17,7 @@ from datetime import date
 import pandas as pd
 
 from .base import BaseLoader, LoaderConfig
-from utils.validators import DataValidator
+from Factor_DB.utils.validators import DataValidator
 
 logger = logging.getLogger(__name__)
 

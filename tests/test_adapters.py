@@ -14,8 +14,8 @@ import pandas as pd
 
 from adapters.pandas_adapter import PandasAdapter
 from adapters.engine_adapter import FactorTradingAdapter, DataLoaderV3Adapter
-from core.connection import DuckDBConnection
-from core.schema import SchemaManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 
 
 class TestPandasAdapter(unittest.TestCase):

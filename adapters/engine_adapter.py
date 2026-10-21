@@ -14,9 +14,9 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from query.price_query import PriceQuery
-from query.factor_query import FactorQuery
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.query.price_query import PriceQuery
+from Factor_DB.query.factor_query import FactorQuery
 
 logger = logging.getLogger(__name__)
 

@@ -15,7 +15,7 @@ from datetime import date, datetime
 import pandas as pd
 import numpy as np
 
-from core.connection import DuckDBConnection
+from Factor_DB.core.connection import DuckDBConnection
 from query.price_query import PriceQuery
 
 

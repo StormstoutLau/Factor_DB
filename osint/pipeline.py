@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from core.connection import DuckDBConnection
-from core.metadata_manager import MetadataManager
+from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.metadata_manager import MetadataManager
 from .base import BaseCollector, CollectorConfig, OSINTEvent, OSINTEventType
 from .registry import CollectorRegistry
 
@@ -145,13 +145,13 @@ class OSINTPipeline:
             - 舆情数据 → news_sentiment 表
             - 其他数据 → alternative_data 表
         """
-        from loaders.macro_loader import MacroLoader
-        from loaders.news_loader import NewsLoader
-        from loaders.alternative_loader import AlternativeLoader
+        from Factor_DB.loaders.macro_loader import MacroLoader
+        from Factor_DB.loaders.news_loader import NewsLoader
+        from Factor_DB.loaders.alternative_loader import AlternativeLoader
 
         data_type = self._detect_data_type(df, source_id)
 
-        from loaders.base import LoaderConfig
+        from Factor_DB.loaders.base import LoaderConfig
         loader_config = LoaderConfig(db_path=self.db_path)
 
         try:

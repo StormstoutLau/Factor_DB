@@ -16,11 +16,11 @@ from typing import Optional, List, Dict
 import pandas as pd
 import numpy as np
 
-from query.price_query import PriceQuery
-from query.factor_query import FactorQuery
-from query.macro_query import MacroQuery
-from query.sentiment_query import SentimentQuery
-from query.alternative_query import AlternativeQuery
+from Factor_DB.query.price_query import PriceQuery
+from Factor_DB.query.factor_query import FactorQuery
+from Factor_DB.query.macro_query import MacroQuery
+from Factor_DB.query.sentiment_query import SentimentQuery
+from Factor_DB.query.alternative_query import AlternativeQuery
 
 logger = logging.getLogger(__name__)
 
