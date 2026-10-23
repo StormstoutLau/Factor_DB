@@ -202,7 +202,7 @@ BaseLoader.write_factor_long() 单事务双写
 - ~~**[P0]** `factor_data` 主键缺失~~ → 已由 `factor_wide` 主键解决；原长表备份不再需要主键
 - ~~**[P0]** `idx_factor_code_date`、`idx_factor_pit` 索引缺失~~ → 查询已切到 `factor_wide` / `factor_history`，不再依赖长表索引
 - ~~**[P0]** 双轨迁移未在生产库执行~~ → 2026-10-23 已完成
-- **[P1]** 逐因子 upsert 迁移路径（`migrate_factor_data_to_wide`）在 241 列宽表上性能不可用（实测 130+ 小时），生产迁移改用两阶段重建；后续如需再次迁移应复用该方案
+- **[P1 - 已沉淀]** 逐因子 upsert 迁移路径（`migrate_factor_data_to_wide`）在 241 列宽表上性能不可用（实测 130+ 小时）；已新增 `SchemaManager.rebuild_factor_data_dual_track()` 两阶段重建（5 个测试），后续迁移优先使用该方法
 - **[P2]** `factor_data_backup_20261023_162924` 占约 46 GB，确认无需回滚后可删除
 - **[P2]** Level 1 数据已转 Parquet，但 `level1_snapshots` 表 0 行（历史导入未完成）
 - **[P2]** CSMAR 因子待导入

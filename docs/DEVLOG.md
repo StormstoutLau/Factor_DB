@@ -20,6 +20,7 @@
   - `ALTER TABLE factor_data RENAME` 会被 `idx_factor_name_date` 索引依赖阻止，需先 `DROP INDEX`
   - F: 为 2TB 机械硬盘（约 48 MB/s），分块扫描受 I/O 限制（18.8 → 75 分钟/块）
 - **校验**: 视图/宽表/历史表对象类型正确；241 个因子列；抽样因子行数全量一致（如 LT_debt_ratio 7,418,391、working_capital 8,545,471）；视图与宽表区间计数一致，均值差异仅为浮点求和顺序
+- **代码化**: 新增 `SchemaManager.rebuild_factor_data_dual_track(chunk_size, sample_size, temp_directory)`；`_replace_factor_data_with_view` 自动删除 `factor_data` 索引以解除 RENAME 依赖；新增 `test_rebuild_dual_track.py` 5 个用例，全量 **281 passed**
 
 ### 因子写路径统一（迁移前置，ADR-0004）
 - **背景**: 迁移后 `factor_data` 变为视图（不可写），daily/csmar/phase1 三条写路径会失效；`factor_wide` 已存在时 `create_factor_wide` 的 `IF NOT EXISTS` 不补列

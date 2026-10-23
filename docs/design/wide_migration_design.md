@@ -123,3 +123,56 @@ def _configure_migration(self, conn) -> None:
 - [x] 物理数据 8GB vs 文件 46GB 差异已实测（非臆测）
 - [x] `idx_factor_name_date` 索引已实测存在（迁移的 WHERE 过滤可用）
 - [x] 无臆造不存在的 DuckDB 函数/特性
+
+---
+
+## 7. 修订：两阶段重建（2026-10-23）
+
+### 7.1 背景
+
+§3 的逐因子 `INSERT ... ON CONFLICT DO UPDATE` 在生产库实测不可用：
+
+- 18.3 小时仅完成 56/241 因子
+- 吞吐从 1,171K rows/min 退化到 155K rows/min
+- 按退化趋势预计 130+ 小时
+
+根因：每次 upsert 重写约 800 万行 × 241 列的整行，宽表填充度越高成本越高；DuckDB 无 VACUUM 回收。
+
+### 7.2 新接口
+
+```python
+SchemaManager.rebuild_factor_data_dual_track(
+    chunk_size: int = 24,
+    sample_size: int = 6,
+    temp_directory: Optional[str] = None,
+) -> dict[str, int]
+```
+
+安全语义与 `migrate_factor_data_to_wide` 一致：
+
+- `factor_data` 已是视图 → 幂等短路，返回全 0
+- 源表仅在全部成功后才 RENAME；失败源表不变
+- `factor_wide` / `factor_history` 为派生表，重建前删除
+
+### 7.3 算法
+
+1. **Phase A**：`CREATE TABLE factor_history AS SELECT ... FROM factor_data WHERE factor_value IS NOT NULL`（单次顺序扫描 + 行数对账）
+2. **Phase B**：按 `chunk_size` 分块：
+   ```sql
+   SELECT trade_date, stock_code, MAX(loaded_at) AS loaded_at,
+          arg_max(CASE WHEN factor_name = 'f' THEN factor_value END,
+                  COALESCE(loaded_at, CURRENT_TIMESTAMP)) AS "f"
+   FROM factor_history
+   WHERE factor_name IN (...)
+   GROUP BY trade_date, stock_code
+   ```
+   然后逐轮 `FULL JOIN USING (trade_date, stock_code)`，`loaded_at` 取 `GREATEST`
+3. **Phase C**：创建 `factor_wide`（241 列 + PK）→ 抽样对账（历史 distinct 键数 vs 宽表非空数）→ `_replace_factor_data_with_view()`
+
+### 7.4 实测与约束
+
+- 生产库总耗时约 13 小时（Phase A 49.9 分钟；分块 18.8–75.1 分钟/块，受 F: 机械硬盘 I/O 限制；合并 4 轮共 80.1 分钟）
+- `FILTER (WHERE ...)` 聚合实测退化为串行（约 0.25 核），必须用 `CASE WHEN` 形式
+- 分块 pivot 缺少 `CASE WHEN factor_name=...` 会把整块聚合成同一列，导致宽表列计数等于分块键数
+- `_replace_factor_data_with_view` 现在会先删除 `factor_data` 上的索引（索引是 RENAME 的依赖对象）
+- `temp_directory` 建议指向 SSD；机械硬盘上溢写会与数据库读竞争 I/O

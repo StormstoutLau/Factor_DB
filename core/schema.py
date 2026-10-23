@@ -915,6 +915,10 @@ class SchemaManager:
     def migrate_factor_data_to_wide(self, batch_size: int = 5) -> dict:
         """将 factor_data 长表迁移到双轨存储（factor_wide + factor_history）
 
+        注意：本方法逐因子 upsert，在 241 列宽表 / 16.8 亿行规模下实测不可用
+        （预计 130+ 小时）。大规模迁移请使用
+        ``rebuild_factor_data_dual_track()``。
+
         安全语义（见 docs/design/migration_safety_design.md）：
         - 任一因子失败 → 中止，源表 factor_data 保持不变（不 RENAME、不 DROP）
         - 每因子宽表+历史表在同一事务内提交，并做行数对账
@@ -1138,6 +1142,233 @@ class SchemaManager:
             logger.error(f"迁移因子 {factor_name} 失败: {e}")
             raise MigrationError(f"迁移因子 {factor_name} 失败: {e}") from e
 
+    def rebuild_factor_data_dual_track(
+        self,
+        chunk_size: int = 24,
+        sample_size: int = 6,
+        temp_directory: Optional[str] = None,
+    ) -> dict[str, int]:
+        """两阶段重建双轨存储（适用于超大 factor_data）
+
+        与逐因子 upsert 的 ``migrate_factor_data_to_wide`` 相比：
+        - Phase A：单次顺序扫描 factor_data → factor_history
+        - Phase B：按因子分块 pivot（arg_max + CASE）→ 逐轮 FULL JOIN 合并
+        - Phase C：创建 factor_wide + 主键、抽样对账、替换为视图
+
+        安全语义：
+        - factor_data 已是视图时幂等短路，返回空 dict
+        - factor_data 为源表时，仅在全部成功后才 RENAME；失败源表不变
+        - factor_wide / factor_history 为派生表，重建前会被删除
+
+        Args:
+            chunk_size: 每块因子数（建议 16–32）
+            sample_size: 对账抽样因子数（0 表示跳过）
+            temp_directory: DuckDB 溢写目录（建议放在 SSD 上）
+
+        Returns:
+            {'factors': 因子数, 'history_rows': 历史行数, 'wide_rows': 宽表行数}
+        """
+        empty = {'factors': 0, 'history_rows': 0, 'wide_rows': 0}
+
+        if self._is_view('factor_data'):
+            logger.info("factor_data 已是视图，无需重建")
+            return empty
+
+        if chunk_size < 1:
+            raise ValueError("chunk_size 必须 >= 1")
+        if sample_size < 0:
+            raise ValueError("sample_size 不能为负")
+
+        try:
+            with self.conn as conn:
+                self._configure_migration(conn)
+                if temp_directory:
+                    conn.execute(
+                        f"SET temp_directory={escape_literal(temp_directory)}"
+                    )
+
+                if self._table_type(conn, 'factor_data') != 'BASE TABLE':
+                    raise MigrationError("factor_data 不是源表，无法重建")
+
+                # ---------- 清理派生表与上次残留 ----------
+                leftovers = conn.execute("""
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_name LIKE '\\_rebuild\\_chunk\\_%' ESCAPE '\\'
+                       OR table_name LIKE '\\_rebuild\\_merge\\_%' ESCAPE '\\'
+                """).fetchall()
+                for (name,) in leftovers:
+                    conn.execute(f'DROP TABLE {quote_identifier(name)}')
+                conn.execute('DROP TABLE IF EXISTS factor_wide')
+                conn.execute('DROP TABLE IF EXISTS factor_history')
+
+                # ---------- Phase A: 重建历史表 ----------
+                conn.execute('SET preserve_insertion_order=true')
+                logger.info("两阶段重建 Phase A: 扫描 factor_data → factor_history")
+                src_rows = conn.execute(
+                    'SELECT COUNT(*) FROM factor_data WHERE factor_value IS NOT NULL'
+                ).fetchone()[0]
+                factors = [
+                    r[0] for r in conn.execute(
+                        'SELECT DISTINCT factor_name FROM factor_data '
+                        'WHERE factor_value IS NOT NULL ORDER BY factor_name'
+                    ).fetchall()
+                ]
+                if not factors:
+                    raise MigrationError("factor_data 无非空因子数据")
+
+                conn.execute('''
+                    CREATE TABLE factor_history AS
+                    SELECT trade_date,
+                           stock_code,
+                           factor_name,
+                           factor_value,
+                           COALESCE(loaded_at, CURRENT_TIMESTAMP) AS loaded_at
+                    FROM factor_data
+                    WHERE factor_value IS NOT NULL
+                ''')
+                hist_rows = conn.execute(
+                    'SELECT COUNT(*) FROM factor_history'
+                ).fetchone()[0]
+                if hist_rows != src_rows:
+                    raise MigrationError(
+                        f"历史表行数对账失败: {hist_rows} != {src_rows}"
+                    )
+                logger.info(
+                    f"  factor_history: {hist_rows:,} 行 / {len(factors)} 因子"
+                )
+
+                # ---------- Phase B: 分块 pivot + 合并 ----------
+                conn.execute('SET preserve_insertion_order=false')
+                tables: list[str] = []
+                cols_map: dict[str, list[str]] = {}
+
+                for idx, start in enumerate(range(0, len(factors), chunk_size)):
+                    chunk = factors[start:start + chunk_size]
+                    name = f'_rebuild_chunk_{idx}'
+                    value_cols = ',\n'.join(
+                        f'arg_max(CASE WHEN factor_name = {escape_literal(f)} '
+                        f'THEN factor_value END, '
+                        f'COALESCE(loaded_at, CURRENT_TIMESTAMP)) '
+                        f'AS {quote_identifier(f)}'
+                        for f in chunk
+                    )
+                    in_list = ', '.join(escape_literal(f) for f in chunk)
+                    conn.execute(f'''
+                        CREATE TABLE {name} AS
+                        SELECT trade_date, stock_code,
+                               MAX(loaded_at) AS loaded_at,
+                               {value_cols}
+                        FROM factor_history
+                        WHERE factor_name IN ({in_list})
+                        GROUP BY trade_date, stock_code
+                    ''')
+                    tables.append(name)
+                    cols_map[name] = chunk
+                    logger.info(
+                        f"  分块 {idx + 1}: {len(chunk)} 因子 / "
+                        f"{conn.execute(f'SELECT COUNT(*) FROM {name}').fetchone()[0]:,} 键"
+                    )
+
+                round_no = 0
+                while len(tables) > 1:
+                    next_tables: list[str] = []
+                    next_cols: dict[str, list[str]] = {}
+                    for i in range(0, len(tables), 2):
+                        if i + 1 == len(tables):
+                            next_tables.append(tables[i])
+                            next_cols[tables[i]] = cols_map[tables[i]]
+                            continue
+
+                        a, b = tables[i], tables[i + 1]
+                        name = f'_rebuild_merge_{round_no}_{i // 2}'
+                        select_sql = ',\n'.join(
+                            [f'a.{quote_identifier(c)} AS {quote_identifier(c)}'
+                             for c in cols_map[a]]
+                            + [f'b.{quote_identifier(c)} AS {quote_identifier(c)}'
+                               for c in cols_map[b]]
+                        )
+                        conn.execute(f'''
+                            CREATE TABLE {name} AS
+                            SELECT trade_date, stock_code,
+                                   GREATEST(a.loaded_at, b.loaded_at) AS loaded_at,
+                                   {select_sql}
+                            FROM {a} a
+                            FULL JOIN {b} b USING (trade_date, stock_code)
+                        ''')
+                        next_tables.append(name)
+                        next_cols[name] = cols_map[a] + cols_map[b]
+
+                    for t in tables:
+                        if t not in next_tables:
+                            conn.execute(f'DROP TABLE {quote_identifier(t)}')
+                    tables, cols_map = next_tables, next_cols
+                    round_no += 1
+                    logger.info(f"  合并轮次 {round_no}: 剩余 {len(tables)} 表")
+
+                # ---------- Phase C: 宽表 + 主键 ----------
+                final_table = tables[0]
+                all_cols = cols_map[final_table]
+                col_defs = ',\n'.join(
+                    f'{quote_identifier(c)} DOUBLE' for c in all_cols
+                )
+                conn.execute(f'''
+                    CREATE TABLE factor_wide (
+                        trade_date DATE NOT NULL,
+                        stock_code VARCHAR NOT NULL,
+                        loaded_at TIMESTAMP NOT NULL,
+                        {col_defs},
+                        PRIMARY KEY (trade_date, stock_code)
+                    )
+                ''')
+                select_cols = ', '.join(
+                    quote_identifier(c) for c in all_cols
+                )
+                conn.execute(f'''
+                    INSERT INTO factor_wide
+                    SELECT trade_date, stock_code, loaded_at, {select_cols}
+                    FROM {quote_identifier(final_table)}
+                ''')
+                conn.execute(f'DROP TABLE {quote_identifier(final_table)}')
+                wide_rows = conn.execute(
+                    'SELECT COUNT(*) FROM factor_wide'
+                ).fetchone()[0]
+                logger.info(f"  factor_wide: {wide_rows:,} 行 / {len(all_cols)} 列")
+
+                # ---------- 抽样对账 ----------
+                if sample_size and all_cols:
+                    step = max(1, len(all_cols) // sample_size)
+                    for f in all_cols[::step][:sample_size]:
+                        # 历史表保留多版本，宽表按 (trade_date, stock_code) 去重
+                        h = conn.execute(
+                            'SELECT COUNT(*) FROM ('
+                            '  SELECT DISTINCT trade_date, stock_code '
+                            '  FROM factor_history WHERE factor_name = $f'
+                            ') t', {'f': f}
+                        ).fetchone()[0]
+                        w = conn.execute(
+                            f'SELECT COUNT({quote_identifier(f)}) FROM factor_wide'
+                        ).fetchone()[0]
+                        if h != w:
+                            raise MigrationError(
+                                f"因子 {f} 行数对账失败: history {h} != wide {w}"
+                            )
+                        logger.info(f"  对账 {f}: {h:,} 行 OK")
+
+            # 视图替换使用独立连接（内部自行处理索引依赖）
+            self._replace_factor_data_with_view()
+
+            return {
+                'factors': len(factors),
+                'history_rows': hist_rows,
+                'wide_rows': wide_rows,
+            }
+
+        except MigrationError:
+            raise
+        except Exception as e:
+            logger.error(f"两阶段重建失败: {e}")
+            raise MigrationError(f"两阶段重建失败: {e}") from e
+
     def _replace_factor_data_with_view(self) -> bool:
         """将 factor_data 表替换为视图（UNPIVOT factor_wide）
 
@@ -1191,6 +1422,20 @@ class SchemaManager:
                 # 单事务：RENAME 备份 + 创建视图，任一失败整体回滚
                 conn.execute("BEGIN TRANSACTION")
                 try:
+                    # 索引是 factor_data 的依赖对象，会阻止 RENAME
+                    indexes = conn.execute(
+                        "SELECT index_name FROM duckdb_indexes() "
+                        "WHERE table_name = 'factor_data'"
+                    ).fetchall()
+                    for (index_name,) in indexes:
+                        validate_identifier(index_name, '索引名')
+                        conn.execute(f'DROP INDEX {quote_identifier(index_name)}')
+                    if indexes:
+                        logger.info(
+                            f"已删除 factor_data 上的 {len(indexes)} 个索引"
+                            "（避免 RENAME 依赖阻塞）"
+                        )
+
                     conn.execute(
                         f'ALTER TABLE factor_data RENAME TO {quote_identifier(backup_name)}'
                     )
