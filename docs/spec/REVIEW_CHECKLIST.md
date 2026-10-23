@@ -134,3 +134,29 @@
 ### 静态验收
 - [x] `INSERT INTO factor_data` 仅出现在 `BaseLoader._write_factor_from_temp` 的 legacy 分支（生产代码）
 - [x] `_import_to_factor_table` 已删除
+
+---
+
+## 七、生产库双轨迁移（2026-10-23）
+
+### 迁移执行
+- [x] 迁移前检查：`factor_data` 实体表 1,683,530,224 行 / 241 因子，`factor_wide`/`factor_history` 不存在，磁盘充足
+- [x] 逐因子 upsert 迁移实测不可用（18.3 小时仅 56/241，吞吐持续退化），已中止
+- [x] 两阶段重建：history 单次扫描（1,683,530,224 行）→ 24 因子分块 pivot（11 块）→ 4 轮 FULL JOIN 合并
+- [x] 分块 pivot 修复：`arg_max(CASE WHEN factor_name=... THEN factor_value END, loaded_at)`，语义切片验证通过
+- [x] `factor_wide` 创建 + 主键，9,307,121 行 / 241 列
+- [x] 抽样对账：LT_debt_ratio / UTR_turnover / UTR_turnover_new / undist_profit_ps / undistr_porfit / working_capital 全部一致
+- [x] 删除 `idx_factor_name_date`（索引依赖阻止 RENAME）
+- [x] `factor_data` RENAME 为 `factor_data_backup_20261023_162924`，创建动态兼容视图
+
+### 迁移后校验
+- [x] 对象类型：`factor_data`=VIEW、`factor_wide`/`factor_history`/备份=BASE TABLE
+- [x] 行数：wide 9,307,121 / history 1,683,530,224 / 备份 1,683,530,224
+- [x] 因子列数 241；宽表抽样非空计数与 history 一致
+- [x] 视图与宽表区间查询计数一致（均值差异仅为浮点求和顺序）
+- [x] 视图点查可用（`factor_name` + 单日，约 3 秒）
+- [x] DEVLOG / ARCHITECTURE / ADR-0004 同步
+
+### 后续
+- [ ] 确认无需回滚后删除 `factor_data_backup_20261023_162924`（约 46 GB）
+- [ ] 评估将 `migrate_factor_data_to_wide` 改为两阶段实现，或标记为不推荐

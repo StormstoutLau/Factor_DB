@@ -117,11 +117,12 @@ PRIMARY KEY (trade_date, stock_code, factor_name, loaded_at)
 
 | 表 | 结构 | 主键 | 用途 | 状态 |
 |----|------|------|------|------|
-| `factor_wide` | 宽表（每因子一列） | `(trade_date, stock_code)` | 99% 日常查询 | ⚠️ 代码已实现，未建表 |
-| `factor_history` | 长表（EAV） | 无 | PIT 回测/审计 | ⚠️ 代码已实现，未建表 |
-| `factor_data` | 视图（UNPIVOT wide） | - | 向后兼容 | 迁移后替换 |
+| `factor_wide` | 宽表（每因子一列，241 列） | `(trade_date, stock_code)` | 99% 日常查询 | ✅ 9,307,121 行 |
+| `factor_history` | 长表（EAV） | 无 | PIT 回测/审计 | ✅ 1,683,530,224 行 |
+| `factor_data` | 视图（动态 UNPIVOT wide） | - | 向后兼容 | ✅ 已替换为视图 |
+| `factor_data_backup_20261023_162924` | 原长表备份 | 无（索引已删） | 回滚/审计 | ✅ 1,683,530,224 行 |
 
-> **关键状态**: 双轨迁移代码（`SchemaManager.migrate_factor_data_to_wide()`）已按 ADR-0008 安全化（fail-fast / 单因子事务 / 行数对账 / RENAME 备份），`test_migration.py` 11 个测试通过、全量 245 通过。生产库尚未执行迁移：`factor_wide`/`factor_history` 表当前不存在，数据仍在 `factor_data` 长表中。
+> **关键状态**: 生产库双轨迁移已于 2026-10-23 完成。`factor_data` 为动态视图（`UNPIVOT COLUMNS(* EXCLUDE (trade_date, stock_code, loaded_at))`），新因子列自动可见。原表保留为 `factor_data_backup_20261023_162924`。注意：原 `idx_factor_name_date` 已删除（索引依赖阻止 RENAME）；回滚时如需该索引需重建。
 
 ### 3.3 Level 1 分钟数据（ADR-0005）
 
@@ -170,9 +171,9 @@ loaders (DailyLoader / Level1Loader / CSMARLoader / ...)
     ↓
 UNPIVOT 宽→长转换（DuckDB 原生，避免 pandas melt）
     ↓
-factor_data 长表 INSERT（保留 loaded_at 版本）
-    ↓
-[可选] 双写 factor_wide + factor_history（迁移后）
+BaseLoader.write_factor_long() 单事务双写
+    ├─ factor_history（保留 loaded_at 版本）
+    └─ factor_wide（ON CONFLICT 更新最新值）
 ```
 
 ### 5.2 查询流程
@@ -198,9 +199,11 @@ factor_data 长表 INSERT（保留 loaded_at 版本）
 
 ## 七、已知问题（Remaining Issues）
 
-- **[P0]** `factor_data` 主键缺失（871M→16.8 亿行，`ADD PRIMARY KEY` 需 >26GB 内存，32GB 机器无法完成）
-- **[P0]** `idx_factor_code_date`、`idx_factor_pit` 索引缺失（同上 OOM）
-- **[P0]** 双轨迁移未在生产库执行（`factor_wide`/`factor_history` 未建表；迁移代码已安全化，失败不丢数据）
+- ~~**[P0]** `factor_data` 主键缺失~~ → 已由 `factor_wide` 主键解决；原长表备份不再需要主键
+- ~~**[P0]** `idx_factor_code_date`、`idx_factor_pit` 索引缺失~~ → 查询已切到 `factor_wide` / `factor_history`，不再依赖长表索引
+- ~~**[P0]** 双轨迁移未在生产库执行~~ → 2026-10-23 已完成
+- **[P1]** 逐因子 upsert 迁移路径（`migrate_factor_data_to_wide`）在 241 列宽表上性能不可用（实测 130+ 小时），生产迁移改用两阶段重建；后续如需再次迁移应复用该方案
+- **[P2]** `factor_data_backup_20261023_162924` 占约 46 GB，确认无需回滚后可删除
 - **[P2]** Level 1 数据已转 Parquet，但 `level1_snapshots` 表 0 行（历史导入未完成）
 - **[P2]** CSMAR 因子待导入
 

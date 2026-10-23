@@ -7,6 +7,20 @@
 
 ## 2026-10（最近）
 
+### 生产库双轨迁移完成（2026-10-23，ADR-0004）
+- **结果**: `factor_data` 1,683,530,224 行 / 241 因子 → `factor_wide` 9,307,121 行（241 列 + PK）、`factor_history` 1,683,530,224 行；`factor_data` 已替换为视图，原表备份为 `factor_data_backup_20261023_162924`
+- **执行方式**: 弃用逐因子 upsert 迁移（`migrate_factor_data_to_wide`），改用两阶段重建
+  - Phase A：单次顺序扫描 `factor_data` → `factor_history`（49.9 分钟）
+  - Phase B：按 24 因子分块 `arg_max(CASE WHEN factor_name=... THEN factor_value END, loaded_at)`（11 块）→ 4 轮 `FULL JOIN` 合并
+  - Phase C：创建 `factor_wide` + PK → 抽样对账 → RENAME 备份 → 动态视图
+- **关键教训**:
+  - 逐因子 `INSERT ... ON CONFLICT DO UPDATE` 在 241 列宽表上产生大量行版本，吞吐从 1,171K rows/min 退化到 155K rows/min，预计需 130+ 小时，实测 18.3 小时仅完成 56/241，已中止
+  - 分块 pivot 必须带因子过滤：`arg_max` 缺少 `CASE WHEN factor_name=...` 会把整个分块聚合成同一列（首次尝试被行数对账拦截）
+  - `FILTER (WHERE ...)` 聚合实测退化为串行（0.25 核），改用 `CASE WHEN` 后可并行
+  - `ALTER TABLE factor_data RENAME` 会被 `idx_factor_name_date` 索引依赖阻止，需先 `DROP INDEX`
+  - F: 为 2TB 机械硬盘（约 48 MB/s），分块扫描受 I/O 限制（18.8 → 75 分钟/块）
+- **校验**: 视图/宽表/历史表对象类型正确；241 个因子列；抽样因子行数全量一致（如 LT_debt_ratio 7,418,391、working_capital 8,545,471）；视图与宽表区间计数一致，均值差异仅为浮点求和顺序
+
 ### 因子写路径统一（迁移前置，ADR-0004）
 - **背景**: 迁移后 `factor_data` 变为视图（不可写），daily/csmar/phase1 三条写路径会失效；`factor_wide` 已存在时 `create_factor_wide` 的 `IF NOT EXISTS` 不补列
 - **spec 流程**: [调研](research/factor_write_path_research.md)（C1–C8 代码实证 + E1/E2 DuckDB 探针） → [设计](design/factor_write_path_design.md)（D1–D9、I1–I5） → [实施](implementation/factor_write_path_implementation.md) → checklist → TDD

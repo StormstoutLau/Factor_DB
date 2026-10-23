@@ -3,6 +3,8 @@
 # ============================
 *.duckdb
 *.duckdb.tmp/
+*.duckdb.wal
+.migration_tmp/
 data/
 *.parquet
 *.feather
