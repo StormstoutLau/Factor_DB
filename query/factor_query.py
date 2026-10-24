@@ -95,6 +95,21 @@ class FactorQuery(BaseQuery):
             return False
         return all(f in self._wide_columns for f in factor_names)
 
+    def _fallback_table(self, factor_names: list[str],
+                        as_of: Optional[date]) -> str:
+        """选择非宽表路径的读取表
+
+        - as_of 非空：PIT 版本链只能走 factor_history
+        - as_of 为空且因子不在宽表（如 CSMAR 批量因子仅存 history）：走 factor_history
+        - 其余回退 factor_data（历史遗留布局）
+        """
+        if self._history_table and (
+            as_of is not None
+            or not self._all_factors_in_wide(factor_names)
+        ):
+            return self._history_table
+        return 'factor_data'
+
     def get_factor(
         self,
         factor_name: str,
@@ -145,10 +160,9 @@ class FactorQuery(BaseQuery):
             return df
 
         if as_of is None and self._wide_table and not self._factor_in_wide(factor_name):
-            logger.debug(f"因子 {factor_name} 不在宽表中，返回空")
-            return pd.DataFrame(columns=['trade_date', 'stock_code', 'factor_name', 'factor_value'])
+            logger.debug(f"因子 {factor_name} 不在宽表中，回退 factor_history")
 
-        table = self._history_table if (as_of is not None and self._history_table) else 'factor_data'
+        table = self._fallback_table([factor_name], as_of)
 
         factor_value_param = bind(params, 'factor_name', factor_name)
         pit_filter = self._build_pit_subquery(
@@ -206,7 +220,7 @@ class FactorQuery(BaseQuery):
             logger.debug(f"宽表截面查询完成: {factor_name} @ {trade_date}, {len(df)} 条记录")
             return df
 
-        table = self._history_table if (as_of is not None and self._history_table) else 'factor_data'
+        table = self._fallback_table([factor_name], as_of)
 
         factor_value_param = bind(params, 'factor_name', factor_name)
         pit_filter = self._build_pit_subquery(
@@ -275,7 +289,7 @@ class FactorQuery(BaseQuery):
             logger.debug(f"宽表因子矩阵: {df.shape}")
             return df
 
-        table = self._history_table if (as_of is not None and self._history_table) else 'factor_data'
+        table = self._fallback_table(factor_names, as_of)
 
         factor_list = bind_in(params, 'factor', factor_names)
         pit_filter = self._build_pit_subquery(
@@ -329,8 +343,9 @@ class FactorQuery(BaseQuery):
             f"AND trade_date = {bind(params, 'stat_date', trade_date)}"
             if trade_date else ""
         )
+        table = self._fallback_table([factor_name], None)
         pit_filter = self._build_pit_subquery(
-            'factor_data', ['trade_date', 'stock_code', 'factor_name'],
+            table, ['trade_date', 'stock_code', 'factor_name'],
             extra_conditions=f"factor_name = {factor_value_param} {date_condition}",
             params=params
         )
@@ -343,7 +358,7 @@ class FactorQuery(BaseQuery):
                 MIN(factor_value) as min,
                 MAX(factor_value) as max,
                 MEDIAN(factor_value) as median
-            FROM factor_data
+            FROM {quote_identifier(table)}
             WHERE factor_name = {factor_value_param}
               AND {pit_filter}
         '''
@@ -394,8 +409,9 @@ class FactorQuery(BaseQuery):
         joined_date_filter = ' AND '.join(joined_conditions) if joined_conditions else '1=1'
 
         factor_value_param = bind(params, 'factor_name', factor_name)
+        factor_table = self._fallback_table([factor_name], None)
         factor_pit_filter = self._build_pit_subquery(
-            'factor_data', ['trade_date', 'stock_code', 'factor_name'],
+            factor_table, ['trade_date', 'stock_code', 'factor_name'],
             extra_conditions=f"factor_name = {factor_value_param} AND {date_filter}",
             params=params
         )
@@ -407,7 +423,7 @@ class FactorQuery(BaseQuery):
                     stock_code,
                     factor_value,
                     RANK() OVER (PARTITION BY trade_date ORDER BY factor_value) as factor_rank
-                FROM factor_data
+                FROM {quote_identifier(factor_table)}
                 WHERE factor_name = {factor_value_param} AND {date_filter} AND {factor_pit_filter}
             ),
             return_rank AS (
@@ -450,16 +466,28 @@ class FactorQuery(BaseQuery):
     def list_factors(self) -> list[str]:
         """列出所有可用因子
 
+        合并宽表列与 factor_info 登记（CSMAR 批量因子仅存 factor_history，
+        通过 factor_info 登记避免扫描 17 亿行历史表）。
+
         Returns:
             因子名称列表
         """
-        if self._wide_table and self._wide_columns:
-            return sorted(self._wide_columns)
+        names = set(self._wide_columns or [])
+        try:
+            rows = self.conn.execute(
+                'SELECT factor_name FROM factor_info'
+            ).fetchall()
+            names.update(r[0] for r in rows)
+        except Exception:
+            pass
+
+        if names:
+            return sorted(names)
 
         table = self._history_table if self._history_table else 'factor_data'
         sql = f'''
             SELECT DISTINCT factor_name
-            FROM {table}
+            FROM {quote_identifier(table)}
             ORDER BY factor_name
         '''
 
@@ -486,8 +514,9 @@ class FactorQuery(BaseQuery):
         params: dict[str, Any] = {}
         date_filter = self._build_date_filter(filter, params)
         factor_value_param = bind(params, 'factor_name', factor_name)
+        factor_table = self._fallback_table([factor_name], None)
         factor_pit_filter = self._build_pit_subquery(
-            'factor_data', ['trade_date', 'stock_code', 'factor_name'],
+            factor_table, ['trade_date', 'stock_code', 'factor_name'],
             extra_conditions=f"factor_name = {factor_value_param} AND {date_filter}",
             params=params
         )
@@ -504,7 +533,7 @@ class FactorQuery(BaseQuery):
             ),
             factor_stocks AS (
                 SELECT trade_date, COUNT(DISTINCT stock_code) as cnt
-                FROM factor_data
+                FROM {quote_identifier(factor_table)}
                 WHERE factor_name = {factor_value_param} AND {date_filter} AND {factor_pit_filter}
                 GROUP BY trade_date
             )

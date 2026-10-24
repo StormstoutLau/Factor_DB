@@ -156,12 +156,14 @@ class BaseLoader(ABC):
         conn.execute('BEGIN TRANSACTION')
         try:
             conn.execute(f'''
-                INSERT INTO factor_history (trade_date, stock_code, factor_name, factor_value)
+                INSERT INTO factor_history
+                    (trade_date, stock_code, factor_name, factor_value, loaded_at)
                 SELECT
                     CAST(trade_date AS DATE),
                     CAST(stock_code AS VARCHAR),
                     $factor_name,
-                    CAST(factor_value AS DOUBLE)
+                    CAST(factor_value AS DOUBLE),
+                    CURRENT_TIMESTAMP
                 FROM {temp}
                 WHERE factor_value IS NOT NULL
             ''', {'factor_name': factor_name})

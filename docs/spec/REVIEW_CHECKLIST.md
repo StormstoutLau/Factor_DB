@@ -162,3 +162,28 @@
 - [x] 新增 `SchemaManager.rebuild_factor_data_dual_track(chunk_size, sample_size, temp_directory)` 两阶段重建方法；`test_rebuild_dual_track.py` 5 个测试通过，全量 **281 passed**
 - [x] `_replace_factor_data_with_view` 自动删除 `factor_data` 索引，避免 RENAME 依赖阻塞
 - [x] 设计文档补充 §7 两阶段重建；`migrate_factor_data_to_wide` 保留但标记为不适用于大规模迁移
+
+---
+
+## 八、Phase 2 Level 1 + Phase 3 CSMAR 导入（2026-10-23 ~ 10-24）
+
+### Phase 2 Level 1 Parquet（ADR-0005）
+- [x] `Level1ParquetConverter.convert_directory()` 增量转换（已存在分区跳过）
+- [x] 分区 2,250 个（`trade_date=YYYY-MM-DD/data.parquet`），共 2,107,016,487 行 / 32.84 GB
+- [x] 对账：源 Feather 2,250 → 分区 2,250，缺失 0、多余 0
+- [x] 抽样分区日期与目录名一致（2014-01-02 / 2018-06-01 / 2023-03-30）
+- [x] `level1_snapshots` 保持空表（分钟数据不进入 DuckDB）
+
+### Phase 3 CSMAR（ADR-0009）
+- [x] 侦察 125 个 distinct 基表的列名/日期/实体/维度变体；确认尾号文件为分片
+- [x] `CSMARLoader` 重写：分片合并、日/周/月/年日期解析、实体识别（stock/index/IND/MKT）、维度激活规则
+- [x] `history_only` 写入路径：单事务 `UNPIVOT` 整文件追加，避免宽表膨胀
+- [x] `factor_info` 登记 + `csmar_import_log` 断点续跑
+- [x] 查询层：非宽表因子回退 `factor_history`（`_fallback_table`），`list_factors` 合并宽表列与 `factor_info`
+- [x] 全量导入：782 个源 / 3,519,531,854 行 / 0 失败；`factor_history` 1,683,530,224 → 5,203,062,078
+- [x] 命名校验：非法 0、最长 54 字符、描述冲突 0
+- [x] 宽表不变性：9,307,121 行 / 241 因子
+- [x] **VPIN 修复**：`N`（篮子数）识别为表级维度（`STEM_DIMENSIONS`）；定向删除旧 4 因子 65,330,164 行并重新导入 13 个 zip → 9,798 万行 / 18 个因子
+- [x] **loaded_at 修复**：`factor_history` 生产表无默认值，批量 INSERT 显式写入 `CURRENT_TIMESTAMP`（`BaseLoader` + CSMAR 批量）；回填 3,519,531,854 行 NULL
+- [x] 定向测试 `tests/test_csmar_loader.py` 13 passed（含 VPIN、loaded_at、分片、周/月/年、市场/指数/行业、DGTW）
+- [x] 文档同步：ADR-0009 / ARCHITECTURE / DEVLOG / 本 checklist

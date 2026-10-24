@@ -14,6 +14,7 @@
 | [0006](0006-null-shell-row-filter.md) | PIT 查询排除 NULL 空壳行 | 已接受 | 2026-07 |
 | [0007](0007-data-source-merge.md) | zhuyi 与 Ashare_data 数据源合并策略 | 已接受 | 2026-07 |
 | [0008](0008-migration-safety.md) | 双轨迁移安全机制（事务 + RENAME 备份 + 对账） | 已接受（修订 0004 执行方式） | 2026-10 |
+| [0009](0009-csmar-history-only.md) | CSMAR 批量因子仅写入长表 | 已接受 | 2026-10 |
 
 ## 决策记录格式
 

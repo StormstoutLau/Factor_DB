@@ -7,6 +7,23 @@
 
 ## 2026-10（最近）
 
+### Phase 2 Level 1 Parquet 分区完成（2026-10-23）
+- **结果**: `data/level1_parquet/` 2,250 个 Hive 分区（`trade_date=YYYY-MM-DD/data.parquet`），共 **2,107,016,487 行**、32.84 GB
+- **校验**: 源 Feather 文件 2,250 个 → 分区 2,250 个，缺失 0、多余 0；抽样分区日期与目录名一致（2014-01-02 / 2018-06-01 / 2023-03-30）
+- **方式**: `Level1ParquetConverter.convert_directory()` 增量转换（已存在分区自动跳过）
+- **说明**: `level1_snapshots` DuckDB 表保持 0 行（ADR-0005：分钟数据不进入 DuckDB 表）
+
+### Phase 3 CSMAR 因子导入完成（2026-10-24）
+- **结果**: 313 个 zip（782 个源 xlsx），`factor_history` 新增 **35.20 亿行**（1,683,530,224 → **5,203,062,078**）；`factor_info` 登记 **5,439** 个 CSMAR 因子（57 个基表）
+- **分类分布（Top）**: 输赢信息表 4,144 / 长期收益排名表(月) 535 / 短期收益排名表(周) 184 / 惯性策略 86 / 羊群效应 57 / IML 43 / 买卖不平衡 40
+- **导入方式**: `CSMARLoader.load_directory()` + `history_only=True`；分片文件（1,000,000 行切分）按基名合并；整文件单条 `UNPIVOT` 追加；`csmar_import_log` 断点续跑
+- **命名规则**: 个股/指数/行业级维度编码进因子名（`_MT_P9706_Q_30_C_0_F_1`）；市场级维度编码进伪实体（`MKT_MT_P9709`）；仅当同一 (日期, 实体) 下维度确实产生多行时才启用
+- **校验**: 导入日志 782 源 / 0 失败；命名非法 0、最长 54 字符、描述冲突 0；宽表不变（9,307,121 行 / 241 因子）；抽样因子行数、日期区间、实体数一致
+- **问题修复**:
+  - `HF_VPIN` 的 `N`（篮子数 50/8）未识别为维度 → `keep='last'` 去重丢弃 50%（1,632 万行）；新增 `STEM_DIMENSIONS` 表级维度映射并定向重导 13 个 zip（9,798 万行 / 18 个因子，含 N=46–49 的极少数边界行）
+  - `factor_history` 由迁移重建时无 `loaded_at` 默认值，批量 INSERT 未显式写入 → 34.9 亿行 `loaded_at` 为 NULL，PIT 子查询 `(…, loaded_at) IN (…)` 恒假，CSMAR 因子查询返回 0 行；改为显式 `CURRENT_TIMESTAMP`（`BaseLoader` 与 CSMAR 批量路径），并回填历史 NULL 行
+- **耗时**: 全量约 7.5 小时（10-23 18:56 → 10-24 02:24），受 F: 机械硬盘 I/O 限制
+
 ### 生产库双轨迁移完成（2026-10-23，ADR-0004）
 - **结果**: `factor_data` 1,683,530,224 行 / 241 因子 → `factor_wide` 9,307,121 行（241 列 + PK）、`factor_history` 1,683,530,224 行；`factor_data` 已替换为视图，原表备份为 `factor_data_backup_20261023_162924`
 - **执行方式**: 弃用逐因子 upsert 迁移（`migrate_factor_data_to_wide`），改用两阶段重建

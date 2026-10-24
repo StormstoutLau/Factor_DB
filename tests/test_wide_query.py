@@ -176,6 +176,32 @@ class TestWideFactorQuery(unittest.TestCase):
 
         self.assertEqual(len(df), 0)
 
+    # ========== 6. 仅存 history 的因子（CSMAR 批量导入） ==========
+
+    def test_get_factor_from_history_for_non_wide_factor(self):
+        """不在宽表的因子应从 factor_history 读取最新版本"""
+        conn = DuckDBConnection(self.config.db_path)
+        with conn as c:
+            c.execute("""
+                INSERT INTO factor_history
+                    (trade_date, stock_code, factor_name, factor_value)
+                VALUES
+                    (DATE '2020-01-31', 'MKT_MT_P9706', 'FF_MktRF', 1.5),
+                    (DATE '2020-02-29', 'MKT_MT_P9706', 'FF_MktRF', 2.5),
+                    (DATE '2020-01-31', 'MKT_MT_P9709', 'FF_MktRF', 1.1)
+            """)
+        conn.close()
+        DuckDBConnection._instances.clear()
+
+        query = FactorQuery(self.config.db_path)
+        df = query.get_factor('FF_MktRF')
+
+        self.assertEqual(len(df), 3)
+        self.assertEqual(set(df['stock_code']), {'MKT_MT_P9706', 'MKT_MT_P9709'})
+
+        section = query.get_cross_section('FF_MktRF', trade_date=date(2020, 1, 31))
+        self.assertEqual(len(section), 2)
+
 
 if __name__ == '__main__':
     unittest.main()
