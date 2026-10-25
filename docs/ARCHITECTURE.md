@@ -25,7 +25,7 @@ Factor_DB 是基于 **DuckDB** 的高性能量化金融数据存储系统，专�
 | `daily_prices` | 43,226,352 | 日 K 行情（OHLCV + 复权） |
 | `stock_info` | 7,472 | 股票基本信息 |
 | `trade_calendar` | 1,475 | 交易日历 |
-| DB 文件 | 69.69 GB | factor_db.duckdb |
+| DB 文件 | 93.43 GB | factor_db.duckdb（重排后膨胀，checkpoint 仅部分回收） |
 | Level 1 Parquet | 2,107,016,487 行 / 32.84 GB | 2,250 个 Hive 分区（不在 DuckDB 内） |
 
 ---
@@ -129,6 +129,8 @@ PRIMARY KEY (trade_date, stock_code, factor_name, loaded_at)
 
 > **关键状态**: 生产库双轨迁移已于 2026-10-23 完成。`factor_data` 为动态视图（`UNPIVOT COLUMNS(* EXCLUDE (trade_date, stock_code, loaded_at))`），新因子列自动可见。原表保留为 `factor_data_backup_20261023_162924`。注意：原 `idx_factor_name_date` 已删除（索引依赖阻止 RENAME）；回滚时如需该索引需重建。
 
+> **`factor_history` 物理顺序**: 2026-10-25 已按 `(factor_name, trade_date, stock_code)` 全量重排（CTAS 外部排序 19.2 小时），单因子查询可依赖 zonemap 跳过绝大多数行组；写入配置需保持 `preserve_insertion_order=true`。
+
 > **CSMAR 批量因子（ADR-0009）**: 仅写 `factor_history`，不进入 `factor_wide`。原因：因子列数量大、键范围覆盖 1990–2026、含指数/行业/市场组合等非股票实体，全部进宽表会导致列数与行宽失控。`factor_info` 登记因子目录，`csmar_import_log` 支持断点续跑。命名规则：个股/指数/行业级维度编码进因子名（`_MT_P9706_Q_30`），市场级维度编码进伪实体（`MKT_MT_P9709`）；表级参数列通过 `STEM_DIMENSIONS` 生效（如 `HF_VPIN` 的 `N` → `_N_50` / `_N_8`）。
 
 ### 3.3 Level 1 分钟数据（ADR-0005）
@@ -213,6 +215,9 @@ BaseLoader.write_factor_long() 单事务双写
 - ~~**[P2]** CSMAR 因子待导入~~ → 2026-10-24 完成：5,439 个因子 / 35.20 亿行（ADR-0009）
 - ~~**[P2]** Level 1 历史导入未完成~~ → 2026-10-23 完成：2,250 分区 / 21.07 亿行；`level1_snapshots` 按 ADR-0005 保持空表
 - **[P1 - 已沉淀]** 逐因子 upsert 迁移路径（`migrate_factor_data_to_wide`）在 241 列宽表上性能不可用（实测 130+ 小时）；已新增 `SchemaManager.rebuild_factor_data_dual_track()` 两阶段重建（5 个测试），后续迁移优先使用该方法
+- ~~**[P2]** `factor_history` 物理顺序为导入顺序~~ → 2026-10-25 已按 `(factor_name, trade_date, stock_code)` 全量重排（19.2 小时），热缓存单因子查询 36.5s → 0.45s
+- **[P2]** DB 文件约 24 GB 死空间（重排后 `DROP` 旧表，`CHECKPOINT` 仅部分回收）；如需压缩需重建/复制数据库
+- **[P2]** `factor_history` 冷缓存首次访问仍 21–25s（HDD 上行组元数据分散读取）；热因子可考虑迁至 SSD
 - **[P2]** `factor_data_backup_20261023_162924` 占约 46 GB，确认无需回滚后可删除
 - **[P2]** `LIQ_ROLL_Y` 无有效数值列，导入时跳过（数据本身为空/文本列）
 

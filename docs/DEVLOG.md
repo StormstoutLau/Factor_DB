@@ -7,6 +7,31 @@
 
 ## 2026-10（最近）
 
+### factor_history 全量物理重排（2026-10-25）
+- **背景**: 迁移 + CSMAR 导入后 `factor_history` 物理顺序等于导入顺序（按文件追加），跨年份多文件因子（如输赢信息表）单因子区间查询需 36.5 秒，zonemap 难以跳过行组
+- **方案**: CTAS 重排 `CREATE TABLE factor_history_sorted AS SELECT * FROM factor_history ORDER BY factor_name, trade_date, stock_code`，设置 `preserve_insertion_order=true`
+  - 连接配置：`threads=4`、`memory_limit='24GB'`、`temp_directory='F:\factor_db_tmp'`（1,438 GB 可用）
+  - 校验：行数与 `loaded_at` 计数对账 → 三因子抽样（1,039 / 741 / 493,127 行及其日期区间）前后一致 → 首末行顺序检查 → `RENAME` 交换 → `DROP` 旧表 → `CHECKPOINT`
+- **结果**: 重排 5,203,062,078 行，CTAS 耗时 **69,082 秒（约 19.2 小时）**；首行 `BF_CRASHRISK_CRASH_Cmdeq / 1991-01-01 / 000001`、末行 `working_capital / 2026-01-27 / 920992`（升序正确）；DB 文件 69.69 → **93.43 GB**（旧表空间仅部分回收）
+- **性能（重排后，`threads=4`，HDD 存储）**:
+
+  | 场景 | 重排前 | 重排后（热缓存） | 重排后（冷缓存，首次访问） |
+  |------|--------|------------------|------------------------------|
+  | `get_factor` 跨文件因子 2024Q1（3,822 行） | 36.5s | **0.45s** | 21.0s |
+  | `get_factor` 跨文件因子全量（211,515 行） | 未测 | 0.63s | 9.0s |
+  | `get_factor` VPIN 2024Q1（314,821 行） | 5.0s | 1.40s | 7.5s |
+  | `get_cross_section`（5,419 行） | 0.1s | 0.05s | 0.24s |
+  | `get_factor_matrix`（103,096 × 4） | 6.8s | 2.6–3.0s | 7.0s |
+  | `get_factor_stats` | 0.7s | 0.05s | 0.04s |
+  | `EXPLAIN ANALYZE` 单因子计数 | — | 0.55s | 25.3s |
+
+- **关键教训**:
+  - 首次尝试把 `temp_directory` 设在 D:（NVMe，200GB），外部排序中间数据达 **179.9 GiB** 撑爆磁盘 → `OutOfMemoryException: failed to offload data block`；改到 F: 后成功
+  - DuckDB 1.5.3 **不支持多 temp_directory**：`D:\...;F:\...` 与 `D:\...,F:\...` 均被当作单一路径，报 `IOException: Failed to create directory`
+  - 排序收益集中在热缓存：zonemap 可跳过绝大多数行组，单因子查询 ~80x；但 HDD 上冷启动仍需 20+ 秒（需读取散落的行组元数据）
+  - `DROP TABLE` + `CHECKPOINT` 只回收少量空间，DB 膨胀约 24 GB 死空间；如需压缩需重建/复制数据库
+- **说明**: 写入路径已配置 `preserve_insertion_order=true`；后续任何 `factor_history` 重建/重导都必须保持 `(factor_name, trade_date, stock_code)` 顺序，否则查询性能回退
+
 ### Phase 2 Level 1 Parquet 分区完成（2026-10-23）
 - **结果**: `data/level1_parquet/` 2,250 个 Hive 分区（`trade_date=YYYY-MM-DD/data.parquet`），共 **2,107,016,487 行**、32.84 GB
 - **校验**: 源 Feather 文件 2,250 个 → 分区 2,250 个，缺失 0、多余 0；抽样分区日期与目录名一致（2014-01-02 / 2018-06-01 / 2023-03-30）

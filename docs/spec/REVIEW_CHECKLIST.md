@@ -187,3 +187,27 @@
 - [x] **loaded_at 修复**：`factor_history` 生产表无默认值，批量 INSERT 显式写入 `CURRENT_TIMESTAMP`（`BaseLoader` + CSMAR 批量）；回填 3,519,531,854 行 NULL
 - [x] 定向测试 `tests/test_csmar_loader.py` 13 passed（含 VPIN、loaded_at、分片、周/月/年、市场/指数/行业、DGTW）
 - [x] 文档同步：ADR-0009 / ARCHITECTURE / DEVLOG / 本 checklist
+
+---
+
+## 九、factor_history 物理重排（2026-10-25）
+
+### 执行
+- [x] 重排前记录基线：行数 5,203,062,078 / `loaded_at` 非空 5,203,062,078 / 三因子抽样行数与日期区间
+- [x] CTAS `ORDER BY factor_name, trade_date, stock_code`；`threads=4`、`memory_limit=24GB`、`temp_directory=F:\factor_db_tmp`、`preserve_insertion_order=true`
+- [x] 首次尝试 `temp_directory=D:` 因外部排序中间数据 179.9 GiB 触发 OOM，改 F: 后成功（DuckDB 1.5.3 不支持多 temp_directory）
+- [x] 重排耗时 69,082 秒（约 19.2 小时）
+
+### 校验
+- [x] 行数对账：5,203,062,078 → 5,203,062,078，`loaded_at` 计数一致
+- [x] 抽样三因子前后一致：1,039 / 741 / 493,127 行，日期区间 2023-04~2025-12、1992-01~2026-02
+- [x] 首末行顺序正确（`BF_CRASHRISK_CRASH_Cmdeq / 1991-01-01` → `working_capital / 2026-01-27`）
+- [x] `RENAME` 交换 + `DROP` 旧表 + `CHECKPOINT`（2s）完成；DB 69.69 → 93.43 GB
+- [x] 查询基线（热缓存）：跨文件单因子 2024Q1 36.5s → 0.45s；VPIN 2024Q1 5.0s → 1.40s；matrix 6.8s → 2.6–3.0s；stats 0.7s → 0.05s
+- [x] 冷缓存首次访问仍 21–25s（HDD 行组元数据分散），已在 DEVLOG 注明
+- [x] 文档同步：DEVLOG / ARCHITECTURE / 本 checklist
+
+### 遗留
+- [ ] DB 约 24 GB 死空间（`DROP` 旧表后 checkpoint 仅部分回收），如需压缩需重建/复制数据库
+- [ ] 冷缓存路径可考虑将热因子迁至 SSD 或增加专用索引缓存层
+
