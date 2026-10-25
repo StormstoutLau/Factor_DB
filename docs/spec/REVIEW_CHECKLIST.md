@@ -158,7 +158,7 @@
 - [x] DEVLOG / ARCHITECTURE / ADR-0004 同步
 
 ### 后续
-- [ ] 确认无需回滚后删除 `factor_data_backup_20261023_162924`（约 46 GB）
+- [ ] 确认无需回滚后删除 `factor_data_backup_20261023_162924`（实测约 11.6 GiB，见 [遗留问题调研](../research/remaining_issues_research.md)）
 - [x] 新增 `SchemaManager.rebuild_factor_data_dual_track(chunk_size, sample_size, temp_directory)` 两阶段重建方法；`test_rebuild_dual_track.py` 5 个测试通过，全量 **281 passed**
 - [x] `_replace_factor_data_with_view` 自动删除 `factor_data` 索引，避免 RENAME 依赖阻塞
 - [x] 设计文档补充 §7 两阶段重建；`migrate_factor_data_to_wide` 保留但标记为不适用于大规模迁移

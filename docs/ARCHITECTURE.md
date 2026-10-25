@@ -216,9 +216,10 @@ BaseLoader.write_factor_long() 单事务双写
 - ~~**[P2]** Level 1 历史导入未完成~~ → 2026-10-23 完成：2,250 分区 / 21.07 亿行；`level1_snapshots` 按 ADR-0005 保持空表
 - **[P1 - 已沉淀]** 逐因子 upsert 迁移路径（`migrate_factor_data_to_wide`）在 241 列宽表上性能不可用（实测 130+ 小时）；已新增 `SchemaManager.rebuild_factor_data_dual_track()` 两阶段重建（5 个测试），后续迁移优先使用该方法
 - ~~**[P2]** `factor_history` 物理顺序为导入顺序~~ → 2026-10-25 已按 `(factor_name, trade_date, stock_code)` 全量重排（19.2 小时），热缓存单因子查询 36.5s → 0.45s
-- **[P2]** DB 文件约 24 GB 死空间（重排后 `DROP` 旧表，`CHECKPOINT` 仅部分回收）；如需压缩需重建/复制数据库
+- **[P2]** DB 文件 free blocks 35.3 GiB（`pragma_database_size` 实测；重排后 `DROP` 旧表，`CHECKPOINT` 仅部分回收）；如需压缩需重建/复制数据库
 - **[P2]** `factor_history` 冷缓存首次访问仍 21–25s（HDD 上行组元数据分散读取）；热因子可考虑迁至 SSD
-- **[P2]** `factor_data_backup_20261023_162924` 占约 46 GB，确认无需回滚后可删除
+- **[P2]** `factor_data_backup_20261023_162924` 约占 11.6 GiB（`pragma_storage_info` block 估算，非旧文档中的 46 GB），确认无需回滚后可删除
+- **[P2]** 压缩重建方案已调研：删备份 + `COPY FROM DATABASE`（约 30–90 分钟，保留物理顺序），见 [遗留问题调研](research/remaining_issues_research.md)
 - **[P2]** `LIQ_ROLL_Y` 无有效数值列，导入时跳过（数据本身为空/文本列）
 
 ---
