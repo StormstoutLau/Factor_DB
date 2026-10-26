@@ -26,7 +26,6 @@ Factor_DB 是基于 **DuckDB** 的高性能量化金融数据存储系统，专�
 | `stock_info` | 7,472 | 股票基本信息 |
 | `trade_calendar` | 1,475 | 交易日历 |
 | DB 文件 | 46.19 GB | `D:\Factor_DB\factor_db_compacted.duckdb`（NVMe，经 `F:\Coding\Factor_DB\factor_db.duckdb` 符号链接访问；free blocks 0） |
-| 旧库归档 | 93.43 GB | `factor_db_pre_compact_20261026.duckdb`（F:，回滚用，确认后可删） |
 | Level 1 Parquet | 2,107,016,487 行 / 32.84 GB | 2,250 个 Hive 分区（不在 DuckDB 内） |
 
 ---
@@ -220,7 +219,7 @@ BaseLoader.write_factor_long() 单事务双写
 - ~~**[P2]** DB 文件 free blocks 35.3 GiB~~ → 2026-10-26 `COPY FROM DATABASE` 压缩完成：93.43 → 46.19 GiB，`free_blocks=0`
 - ~~**[P2]** `factor_history` 冷缓存首次访问 21–25s~~ → 2026-10-26 主库迁至 D: NVMe（符号链接），冷查询 0.92s
 - ~~**[P2]** `factor_data_backup_20261023_162924` 约 11.6 GiB~~ → 2026-10-26 241 因子对账 0 差异后已 `DROP`
-- **[P2]** 旧库归档 `factor_db_pre_compact_20261026.duckdb` 占 93.43 GB（F:），确认无需回滚后可删除
+- ~~**[P2]** 旧库归档 `factor_db_pre_compact_20261026.duckdb` 占 93.43 GB（F:）~~ → 2026-10-26 全量核对通过后已永久删除（释放 93.43 GB，F: 剩余 1,551.1 GB）
 - **[P2]** 目录名（catalog）为 `factor_db_compacted`（由真实文件名派生）；代码全部使用非限定表名，如外部脚本使用 `factor_db.` 限定需注意
 - **[P2]** `LIQ_ROLL_Y` 无有效数值列，导入时跳过（数据本身为空/文本列）
 

@@ -18,6 +18,12 @@
 - **性能（NVMe）**: 跨文件单因子 2024Q1 冷 **0.92s** / 热 0.23s（原 HDD 冷 21–25s、热 0.45s）；全量单因子 0.39s；VPIN 冷 0.04s；`pragma_database_size` 46.1 GiB
 - **运行参数**: 通过符号链接打开时，DuckDB 将 `temp_directory` 解析到真实路径 `D:\Factor_DB\factor_db_compacted.duckdb.tmp`（溢写在 NVMe）；目录名（catalog）为 `factor_db_compacted`
 - **清理**: 删除 killed 进程遗留的 `factor_db.duckdb.tmp`（约 26 GB 溢写文件）；F: 剩余 1,458.7 GB
+- **删除前全量核对（删除归档前执行，耗时约 17 分钟）**:
+  - 结构：18 个对象（表/视图）、380 列（名称/类型/顺序/可空性）、33 个约束、19 个索引、`factor_data` 视图 SQL 全部一致
+  - 行数：18 张表逐一相等（`factor_history` 5,203,062,078 / `factor_wide` 9,307,121 / `daily_prices` 43,226,352 等）
+  - 内容：12 张小表双向 `EXCEPT ALL` 均为 0；`factor_history` 逐因子行数（5,680 因子）与 `SUM(hash(trade_date, stock_code, factor_value, loaded_at))` 校验和全部一致；`factor_wide` 241 列非空计数一致；`daily_prices` 行数/股票数/`close`/`volume` 求和/日期范围一致
+  - 浮点噪声辨析：抽样因子 `UTR_turnover` 的并行 `SUM` 相对差异 0.35%，行级 `EXCEPT ALL` 双向为 0、串行求和完全相同（-7.71171926317038e-09）、分布（无 NULL/NaN/Inf）一致 → 判定为并行归约顺序噪声，非数据差异
+- **归档删除**: 核对通过后删除 `factor_db_pre_compact_20261026.duckdb`；删除默认进入回收站（空间未释放），定位 `$RSVZIVN.duckdb`/`$ISVZIVN.duckdb` 配对永久删除，F: 剩余 1,551.1 GB
 
 ### factor_history 全量物理重排（2026-10-25）
 - **背景**: 迁移 + CSMAR 导入后 `factor_history` 物理顺序等于导入顺序（按文件追加），跨年份多文件因子（如输赢信息表）单因子区间查询需 36.5 秒，zonemap 难以跳过行组

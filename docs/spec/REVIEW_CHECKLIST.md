@@ -239,6 +239,19 @@
 - [x] 文档同步：DEVLOG / ARCHITECTURE §7 / 遗留问题调研 §9 / 本 checklist
 
 ### 遗留
-- [ ] 旧库归档 `factor_db_pre_compact_20261026.duckdb`（93.43 GB）确认无需回滚后删除
-- [ ] catalog 名由真实文件名派生为 `factor_db_compacted`；代码均用非限定表名，外部脚本 `.` 限定需注意
+- [x] ~~旧库归档 `factor_db_pre_compact_20261026.duckdb`（93.43 GB）确认无需回滚后删除~~ → 2026-10-26 全量核对通过后永久删除，F: 剩余 1,551.1 GB
+- [x] ~~catalog 名由真实文件名派生为 `factor_db_compacted`；代码均用非限定表名，外部脚本 `.` 限定需注意~~ → 已确认代码无限定引用
+
+### 归档删除前全量核对（2026-10-26）
+- [x] 结构：18 个对象、380 列（名称/类型/顺序/可空性）、33 个约束、19 个索引、`factor_data` 视图 SQL 全部一致
+- [x] 行数：18 张表逐一相等（history 5,203,062,078；wide 9,307,121；daily_prices 43,226,352；factor_info 5,439；csmar_import_log 782 等）
+- [x] 小表内容：12 张表双向 `EXCEPT ALL` 均为 0（`factor_info` / `stock_info` / `trade_calendar` / `csmar_import_log` 等）
+- [x] `factor_history`：元指标一致（行数 / `loaded_at` / 5,680 因子 / 1990-01-01~2026-03-31）
+- [x] `factor_history`：逐因子行数全部一致，不一致因子 0
+- [x] `factor_history`：逐因子 `SUM(hash(trade_date, stock_code, factor_value, loaded_at))` 校验和全部一致，不一致因子 0
+- [x] `factor_wide`：241 列逐列非空计数全部一致
+- [x] `daily_prices`：行数 / 股票数 / `close` / `volume` 求和 / 日期范围一致
+- [x] 抽样因子数值：6 个因子中 5 个直接通过；`UTR_turnover` 并行 `SUM` 差异经行级 `EXCEPT ALL`（双向 0）与串行求和（完全相同）判定为浮点归约顺序噪声
+- [x] 生产库 `free_blocks=0`（46.1 GiB）
+- [x] 结论 `ARCHIVE_SAFE_TO_DELETE=YES`，归档永久删除后 F: 剩余 1,551.1 GB，符号链接目标仍为 `D:\Factor_DB\factor_db_compacted.duckdb`
 
