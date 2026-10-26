@@ -7,6 +7,18 @@
 
 ## 2026-10（最近）
 
+### DB 压缩重建与备份表清理（2026-10-26）
+- **背景**: `factor_history` 重排后 DB 93.43 GiB，其中 free blocks 35.3 GiB；另存 1,683,530,224 行的迁移备份表
+- **对账门**: 241 个宽表因子，备份表与 `factor_history` 行数逐一比对 → **1,683,530,224 = 1,683,530,224，0 差异**
+- **删备份**: `DROP TABLE factor_data_backup_20261023_162924` + `CHECKPOINT`；used_blocks 238,106 → 190,667（释放 11.6 GiB 逻辑空间）
+- **压缩**: `COPY FROM DATABASE factor_db TO newdb`，目标先落 **D: NVMe**；耗时 **7,104 秒（118.4 分钟）**，新库 **46.19 GiB**、`used_blocks=189,187 / free_blocks=0`
+- **校验**: `factor_history` 5,203,062,078 行、`loaded_at` 全非空；`factor_wide` 9,307,121 行 / 241 因子；5 个抽样因子行数与日期区间一致；首末行保持 `(factor_name, trade_date, stock_code)` 顺序；`factor_data` 视图可用
+- **吞吐实测**: 3–5 MB/s（有序写入单线程 + HDD 列读取）；磁盘未饱和（F: idle 80–94%，queue 0.1）；调研阶段“30–90 分钟”估算被证伪
+- **切换**: 管理员创建符号链接 `F:\Coding\Factor_DB\factor_db.duckdb` → `D:\Factor_DB\factor_db_compacted.duckdb`（创建文件符号链接需要管理员权限）；旧库改名 `factor_db_pre_compact_20261026.duckdb`（93.43 GiB）保留作回滚
+- **性能（NVMe）**: 跨文件单因子 2024Q1 冷 **0.92s** / 热 0.23s（原 HDD 冷 21–25s、热 0.45s）；全量单因子 0.39s；VPIN 冷 0.04s；`pragma_database_size` 46.1 GiB
+- **运行参数**: 通过符号链接打开时，DuckDB 将 `temp_directory` 解析到真实路径 `D:\Factor_DB\factor_db_compacted.duckdb.tmp`（溢写在 NVMe）；目录名（catalog）为 `factor_db_compacted`
+- **清理**: 删除 killed 进程遗留的 `factor_db.duckdb.tmp`（约 26 GB 溢写文件）；F: 剩余 1,458.7 GB
+
 ### factor_history 全量物理重排（2026-10-25）
 - **背景**: 迁移 + CSMAR 导入后 `factor_history` 物理顺序等于导入顺序（按文件追加），跨年份多文件因子（如输赢信息表）单因子区间查询需 36.5 秒，zonemap 难以跳过行组
 - **方案**: CTAS 重排 `CREATE TABLE factor_history_sorted AS SELECT * FROM factor_history ORDER BY factor_name, trade_date, stock_code`，设置 `preserve_insertion_order=true`

@@ -158,7 +158,7 @@
 - [x] DEVLOG / ARCHITECTURE / ADR-0004 同步
 
 ### 后续
-- [ ] 确认无需回滚后删除 `factor_data_backup_20261023_162924`（实测约 11.6 GiB，见 [遗留问题调研](../research/remaining_issues_research.md)）
+- [x] 241 个宽表因子对账 0 差异后 `DROP TABLE factor_data_backup_20261023_162924`（2026-10-26，见 [遗留问题调研 §9](../research/remaining_issues_research.md)）
 - [x] 新增 `SchemaManager.rebuild_factor_data_dual_track(chunk_size, sample_size, temp_directory)` 两阶段重建方法；`test_rebuild_dual_track.py` 5 个测试通过，全量 **281 passed**
 - [x] `_replace_factor_data_with_view` 自动删除 `factor_data` 索引，避免 RENAME 依赖阻塞
 - [x] 设计文档补充 §7 两阶段重建；`migrate_factor_data_to_wide` 保留但标记为不适用于大规模迁移
@@ -208,6 +208,37 @@
 - [x] 文档同步：DEVLOG / ARCHITECTURE / 本 checklist
 
 ### 遗留
-- [ ] DB 约 24 GB 死空间（`DROP` 旧表后 checkpoint 仅部分回收），如需压缩需重建/复制数据库
-- [ ] 冷缓存路径可考虑将热因子迁至 SSD 或增加专用索引缓存层
+- [x] ~~DB 约 24 GB 死空间~~ → 2026-10-26 压缩完成（见第十节）
+- [x] ~~冷缓存路径可考虑将热因子迁至 SSD~~ → 2026-10-26 主库迁 D: NVMe（见第十节）
+
+---
+
+## 十、DB 压缩重建与备份表清理（2026-10-26）
+
+### 执行
+- [x] 对账门：241 个宽表因子在备份表与 `factor_history` 的行数逐因子比对 → 均 1,683,530,224，**0 差异**
+- [x] `DROP TABLE factor_data_backup_20261023_162924` + `CHECKPOINT`：used_blocks 238,106 → 190,667（释放 11.6 GiB 逻辑空间）
+- [x] `COPY FROM DATABASE factor_db TO newdb`，目标 `D:\Factor_DB\factor_db_compacted.duckdb`（NVMe）；读写连接（只读连接无法 ATTACH 新库）、`threads=8`、`memory_limit=24GB`、`preserve_insertion_order=true`
+- [x] 耗时 7,104 秒（118.4 分钟），吞吐 3–5 MB/s；调研文档“30–90 分钟”估算已按实测修正
+
+### 校验
+- [x] `factor_history` 5,203,062,078 行；`loaded_at` 非空 5,203,062,078
+- [x] `factor_wide` 9,307,121 行 / 241 因子列
+- [x] 5 个抽样因子行数与日期区间一致（LT_debt_ratio / UTR_turnover / working_capital / HF_VPIN_VPIN_N_50 / LOSEORWIN）
+- [x] 首末行保持 `(factor_name, trade_date, stock_code)` 顺序
+- [x] `factor_data` 视图可用（返回 5,624 列）
+- [x] 新库 `free_blocks=0`、`database_size=46.1 GiB`；无 WAL
+
+### 切换与基准
+- [x] 管理员权限创建符号链接 `F:\Coding\Factor_DB\factor_db.duckdb` → `D:\Factor_DB\factor_db_compacted.duckdb`（先建临时名再 `Rename-Item` 交换）
+- [x] 旧库改名归档 `factor_db_pre_compact_20261026.duckdb`（93.43 GB）
+- [x] 经生产路径验证：5,203,062,078 行、`factor_data` 视图可用、LOSEORWIN 2024Q1 0.52s
+- [x] NVMe 基准：LOSEORWIN 2024Q1 冷 0.92–0.98s（原 21–25s）/ 热 0.23–0.24s（原 0.45s）；全量单因子 0.39–0.40s；VPIN 2024Q1 0.04s；cross_section 0.02s、stats 0.01–0.02s（matrix 未复测）
+- [x] `temp_directory` 自动解析到真实路径 `D:\Factor_DB\factor_db_compacted.duckdb.tmp`（NVMe），无需设 `FACTOR_DB_TEMP_DIR`
+- [x] 清理 killed 进程遗留的 `F:\Coding\Factor_DB\factor_db.duckdb.tmp`（约 26 GB）
+- [x] 文档同步：DEVLOG / ARCHITECTURE §7 / 遗留问题调研 §9 / 本 checklist
+
+### 遗留
+- [ ] 旧库归档 `factor_db_pre_compact_20261026.duckdb`（93.43 GB）确认无需回滚后删除
+- [ ] catalog 名由真实文件名派生为 `factor_db_compacted`；代码均用非限定表名，外部脚本 `.` 限定需注意
 

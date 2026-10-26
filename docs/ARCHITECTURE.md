@@ -25,7 +25,8 @@ Factor_DB 是基于 **DuckDB** 的高性能量化金融数据存储系统，专�
 | `daily_prices` | 43,226,352 | 日 K 行情（OHLCV + 复权） |
 | `stock_info` | 7,472 | 股票基本信息 |
 | `trade_calendar` | 1,475 | 交易日历 |
-| DB 文件 | 93.43 GB | factor_db.duckdb（重排后膨胀，checkpoint 仅部分回收） |
+| DB 文件 | 46.19 GB | `D:\Factor_DB\factor_db_compacted.duckdb`（NVMe，经 `F:\Coding\Factor_DB\factor_db.duckdb` 符号链接访问；free blocks 0） |
+| 旧库归档 | 93.43 GB | `factor_db_pre_compact_20261026.duckdb`（F:，回滚用，确认后可删） |
 | Level 1 Parquet | 2,107,016,487 行 / 32.84 GB | 2,250 个 Hive 分区（不在 DuckDB 内） |
 
 ---
@@ -216,10 +217,11 @@ BaseLoader.write_factor_long() 单事务双写
 - ~~**[P2]** Level 1 历史导入未完成~~ → 2026-10-23 完成：2,250 分区 / 21.07 亿行；`level1_snapshots` 按 ADR-0005 保持空表
 - **[P1 - 已沉淀]** 逐因子 upsert 迁移路径（`migrate_factor_data_to_wide`）在 241 列宽表上性能不可用（实测 130+ 小时）；已新增 `SchemaManager.rebuild_factor_data_dual_track()` 两阶段重建（5 个测试），后续迁移优先使用该方法
 - ~~**[P2]** `factor_history` 物理顺序为导入顺序~~ → 2026-10-25 已按 `(factor_name, trade_date, stock_code)` 全量重排（19.2 小时），热缓存单因子查询 36.5s → 0.45s
-- **[P2]** DB 文件 free blocks 35.3 GiB（`pragma_database_size` 实测；重排后 `DROP` 旧表，`CHECKPOINT` 仅部分回收）；如需压缩需重建/复制数据库
-- **[P2]** `factor_history` 冷缓存首次访问仍 21–25s（HDD 上行组元数据分散读取）；热因子可考虑迁至 SSD
-- **[P2]** `factor_data_backup_20261023_162924` 约占 11.6 GiB（`pragma_storage_info` block 估算，非旧文档中的 46 GB），确认无需回滚后可删除
-- **[P2]** 压缩重建方案已调研：删备份 + `COPY FROM DATABASE`（约 30–90 分钟，保留物理顺序），见 [遗留问题调研](research/remaining_issues_research.md)
+- ~~**[P2]** DB 文件 free blocks 35.3 GiB~~ → 2026-10-26 `COPY FROM DATABASE` 压缩完成：93.43 → 46.19 GiB，`free_blocks=0`
+- ~~**[P2]** `factor_history` 冷缓存首次访问 21–25s~~ → 2026-10-26 主库迁至 D: NVMe（符号链接），冷查询 0.92s
+- ~~**[P2]** `factor_data_backup_20261023_162924` 约 11.6 GiB~~ → 2026-10-26 241 因子对账 0 差异后已 `DROP`
+- **[P2]** 旧库归档 `factor_db_pre_compact_20261026.duckdb` 占 93.43 GB（F:），确认无需回滚后可删除
+- **[P2]** 目录名（catalog）为 `factor_db_compacted`（由真实文件名派生）；代码全部使用非限定表名，如外部脚本使用 `factor_db.` 限定需注意
 - **[P2]** `LIQ_ROLL_Y` 无有效数值列，导入时跳过（数据本身为空/文本列）
 
 ---
