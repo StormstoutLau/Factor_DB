@@ -66,8 +66,8 @@
 |--------|------|---------|
 | P0 | `factor_data` 主键缺失（>26GB 内存） | ADR-0004, ARCHITECTURE §7 |
 | P0 | 双轨迁移未执行 | ADR-0004, ARCHITECTURE §3.2 |
-| P2 | Level 1 历史导入未完成 | ADR-0005, ARCHITECTURE §7 |
-| P2 | CSMAR 因子导入 | DEVLOG backlog |
+| ~~P2~~ | ~~Level 1 历史导入未完成~~ → 2026-10-23 完成（2,250 分区） | ADR-0005, ARCHITECTURE §7 |
+| ~~P2~~ | ~~CSMAR 因子导入~~ → 2026-10-24 完成（5,439 因子） | ADR-0009 |
 
 ---
 
@@ -254,4 +254,30 @@
 - [x] 抽样因子数值：6 个因子中 5 个直接通过；`UTR_turnover` 并行 `SUM` 差异经行级 `EXCEPT ALL`（双向 0）与串行求和（完全相同）判定为浮点归约顺序噪声
 - [x] 生产库 `free_blocks=0`（46.1 GiB）
 - [x] 结论 `ARCHIVE_SAFE_TO_DELETE=YES`，归档永久删除后 F: 剩余 1,551.1 GB，符号链接目标仍为 `D:\Factor_DB\factor_db_compacted.duckdb`
+
+---
+
+## 十一、P2/P3 遗留项闭环（2026-10-30）
+
+来源：[Claude 评审核实分析](../reviews/2026-10-claude-audit-analysis.md) §五 · 文档：[调研](../research/p2_p3_closure_research.md) / [设计](../design/p2_p3_closure_design.md) / [实施](../implementation/p2_p3_closure_implementation.md) / [ADR-0010](../adr/0010-cache-invalidation-singleton-lifecycle.md)
+
+### 调研与设计
+- [x] 官方文档 + 本机探针双源：DuckDB `DELETE ... RETURNING` 可用、`changes()` 不存在；Python `OrderedDict` LRU 示例
+- [x] 修正事实：主写入路径经 `with self.conn` 使用原生连接，单靠 `execute()` 钩子会漏
+- [x] 设计明确双钩子（`__exit__` + `execute`）且只对写连接递增版本
+
+### TDD
+- [x] 红测试先行：真 LRU / 写后失效（execute 与上下文两条路径）/ 只读不失效 / `close_on_exit` 可更新 / 析构条件关闭 / compact 精确行数 / 打包 3 项（红灯 7 failed）
+- [x] `utils/data_version.py` 版本计数器（线程安全）
+- [x] `QueryCache` 改 `OrderedDict` + 版本校验 + 命中刷新 + `popitem(last=False)` 淘汰
+- [x] `DuckDBConnection`：写连接 `__exit__`/`execute` 递增版本；`close_on_exit: Optional[bool]`；`__del__` 仅关闭已脱离注册表的实例
+- [x] `compact_table`：同谓词 `COUNT(*)` + `DELETE`，返回实际删除行数
+- [x] LICENSE（MIT）、`[project.scripts] factor-db`、删除 0 字节 `tests/test_pivot_optimization.py`
+- [x] 定向测试 37 passed；全量回归 **305 passed**
+- [x] DEVLOG / ARCHITECTURE / ADR-0010 / 本 checklist 同步
+
+### 一致性
+- [x] `pyproject` 脚本目标 `Factor_DB.cli:main` 可导入且可调用
+- [x] README（中/英）声明的 MIT 与 `LICENSE` / `pyproject` 一致
+- [x] ARCHITECTURE / README 中缓存表述与实现一致（LRU + 写后失效）
 

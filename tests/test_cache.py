@@ -75,6 +75,63 @@ class TestQueryCache(unittest.TestCase):
         self.assertIsNotNone(cache.get('sql3'))
         self.assertEqual(len(cache), 2)
 
+    def test_true_lru_on_access(self):
+        """访问过的条目应作为最近使用，淘汰最久未使用的条目"""
+        cache = QueryCache(max_size=2, ttl=999)
+        cache.put('sql1', pd.DataFrame({'x': [1]}))
+        cache.put('sql2', pd.DataFrame({'x': [2]}))
+        self.assertIsNotNone(cache.get('sql1'))  # sql1 变为最近使用
+        cache.put('sql3', pd.DataFrame({'x': [3]}))
+        self.assertIsNone(cache.get('sql2'), "sql2 应被淘汰（最久未使用）")
+        self.assertIsNotNone(cache.get('sql1'))
+        self.assertIsNotNone(cache.get('sql3'))
+        self.assertEqual(len(cache), 2)
+
+
+class TestCacheInvalidation(unittest.TestCase):
+    """写后失效集成测试"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_version.db')
+        self.conn = DuckDBConnection(self.db_path, read_only=False, close_on_exit=False)
+        self.conn.execute("CREATE TABLE t (id INTEGER)")
+
+    def tearDown(self):
+        self.conn.close()
+        DuckDBConnection._instances.clear()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def test_write_invalidates_cached_entry(self):
+        cache = QueryCache(max_size=10, ttl=999)
+        cache.put('SELECT * FROM t', pd.DataFrame({'id': [0]}))
+        self.assertIsNotNone(cache.get('SELECT * FROM t'))
+
+        self.conn.execute("INSERT INTO t VALUES (1)")
+        self.assertIsNone(cache.get('SELECT * FROM t'), "写入后缓存应失效")
+
+    def test_context_manager_write_invalidates_cached_entry(self):
+        """主写入路径：with self.conn 内直接执行原生连接"""
+        cache = QueryCache(max_size=10, ttl=999)
+        with self.conn as c:
+            c.execute("INSERT INTO t VALUES (1)")
+        self.assertIsNone(cache.get('SELECT * FROM t'), "上下文内写入后缓存应失效")
+
+    def test_read_does_not_invalidate(self):
+        # DuckDB 不允许同一文件以不同配置并发打开，先释放写连接
+        self.conn.close()
+        read_conn = DuckDBConnection(self.db_path, read_only=True, close_on_exit=False)
+        cache = QueryCache(max_size=10, ttl=999)
+        cache.put('SELECT * FROM t', pd.DataFrame({'id': [0]}))
+        with read_conn as c:
+            c.execute("SELECT COUNT(*) FROM t").fetchone()
+        self.assertIsNotNone(cache.get('SELECT * FROM t'), "只读查询不应失效缓存")
+        read_conn.close()
+        # 供 tearDown 关闭
+        self.conn = DuckDBConnection(self.db_path, read_only=False, close_on_exit=False)
+
 
 class TestPriceQueryCache(unittest.TestCase):
     """PriceQuery 缓存集成测试"""

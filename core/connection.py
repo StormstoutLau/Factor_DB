@@ -10,13 +10,22 @@ DuckDB 连接管理模块
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Optional
 
 import duckdb
 
+from Factor_DB.utils.data_version import bump_version
+
 logger = logging.getLogger(__name__)
+
+# 首关键字为写语句（用于缓存失效；SET/BEGIN/COMMIT 不算数据变更）
+_WRITE_STATEMENT_RE = re.compile(
+    r'^\s*(insert|update|delete|merge|create|drop|alter|truncate|copy|replace|rename)\b',
+    re.IGNORECASE,
+)
 
 
 class DuckDBConnection:
@@ -47,21 +56,28 @@ class DuckDBConnection:
                     cls._instances[key] = instance
         return cls._instances[key]
 
-    def __init__(self, db_path: str, read_only: bool = False, close_on_exit: bool = True):
+    def __init__(self, db_path: str, read_only: bool = False,
+                 close_on_exit: Optional[bool] = None):
         """初始化连接管理器
 
         Args:
             db_path: 数据库文件路径
             read_only: 是否只读模式
-            close_on_exit: 上下文管理器退出时是否关闭连接（默认 True）
+            close_on_exit: 上下文管理器退出时是否关闭连接；
+                None 表示沿用单例已有配置（首次创建时为 True）
         """
-        # 避免重复初始化
+        # 已存在的单例：仅显式传值才更新配置
         if hasattr(self, '_initialized'):
+            if close_on_exit is not None and close_on_exit != self.close_on_exit:
+                logger.info(
+                    f"更新 close_on_exit: {self.close_on_exit} -> {close_on_exit} ({db_path})"
+                )
+                self.close_on_exit = close_on_exit
             return
 
         self.db_path = Path(db_path)
         self.read_only = read_only
-        self.close_on_exit = close_on_exit
+        self.close_on_exit = True if close_on_exit is None else close_on_exit
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._initialized = True
 
@@ -118,8 +134,14 @@ class DuckDBConnection:
         """
         conn = self.connect()
         if parameters:
-            return conn.execute(query, parameters)
-        return conn.execute(query)
+            result = conn.execute(query, parameters)
+        else:
+            result = conn.execute(query)
+
+        if not self.read_only and _WRITE_STATEMENT_RE.match(query):
+            bump_version()
+
+        return result
 
     def fetchdf(self, query: str, parameters: Optional[dict] = None):
         """执行查询并返回 DataFrame
@@ -139,15 +161,26 @@ class DuckDBConnection:
         return self.connect()
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """上下文管理器出口"""
+        """上下文管理器出口
+
+        写连接的上下文可能包含数据变更（loader/SchemaManager 直接使用原生连接），
+        退出时递增数据版本，使查询缓存立即失效。
+        """
         if exc_type is not None:
             logger.error(f"上下文内发生异常: {exc_val}")
+        elif not self.read_only:
+            bump_version()
         if self.close_on_exit:
             self.close()
 
     def __del__(self):
-        """析构时关闭连接"""
-        self.close()
+        """析构时关闭连接（仅限已脱离单例注册表的实例）"""
+        try:
+            key = f"{self.db_path}:{self.read_only}"
+            if DuckDBConnection._instances.get(key) is not self:
+                self.close()
+        except Exception:
+            pass
 
 
 class ConnectionPool:

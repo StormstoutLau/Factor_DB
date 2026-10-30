@@ -40,7 +40,7 @@ Factor_DB/
 │   ├── sentiment_query.py       #   Sentiment queries (stock sentiment / aggregation / screening)
 │   ├── alternative_query.py     #   Alternative data queries (time series / price correlation)
 │   ├── osint_query.py           #   OSINT (open-source intelligence) queries
-│   └── cache.py                 #   Query result cache (LRU)
+│   └── cache.py                 #   Query result cache (LRU + invalidated on write)
 ├── analytics/                   # Analytics Modules
 │   ├── macro_factor_link.py     #   Macro-factor correlation analysis
 │   ├── sentiment_factor.py      #   Sentiment factor construction & signal generation
@@ -64,7 +64,7 @@ Factor_DB/
 │   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
 │   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
 │   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
-├── tests/                       # Test Suite (266 tests, all passing)
+├── tests/                       # Test Suite (305 tests, all passing)
 ├── benchmarks/                  # Performance Benchmarks
 ├── docs/                        # Documentation
 └── cli.py                       # CLI Entry Point
@@ -332,7 +332,7 @@ DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions 
 python -m pytest tests/ -v
 ```
 
-**266 tests, all passing.** Coverage includes:
+**305 tests, all passing.** Coverage includes:
 
 | Test Suite | Tests | What's Covered |
 |-----------|-------|----------------|

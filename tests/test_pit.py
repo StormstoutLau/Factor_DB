@@ -244,7 +244,7 @@ class TestPITCompact(unittest.TestCase):
         schema = SchemaManager(conn)
         
         deleted = schema.compact_table('daily_prices', '2024-01-03')
-        self.assertGreater(deleted, 0)  # compact 执行成功
+        self.assertEqual(deleted, 2)  # 000001.SZ 与 000002.SZ 各删除 1 条非最新版本
         
         with conn as c:
             remaining = c.execute(

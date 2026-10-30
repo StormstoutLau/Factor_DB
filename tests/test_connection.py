@@ -113,6 +113,41 @@ class TestDuckDBConnection(unittest.TestCase):
 
         conn.close()
 
+    def test_close_on_exit_can_update(self):
+        """单例二次初始化时显式传入 close_on_exit 应生效"""
+        conn = DuckDBConnection(self.db_path)  # 默认 True
+        self.assertTrue(conn.close_on_exit)
+
+        updated = DuckDBConnection(self.db_path, close_on_exit=False)
+        self.assertIs(conn, updated)
+        self.assertFalse(updated.close_on_exit)
+        updated.close()
+
+    def test_default_keeps_existing_close_on_exit(self):
+        """不传 close_on_exit（None）时保持单例已有配置"""
+        conn = DuckDBConnection(self.db_path, close_on_exit=False)
+        DuckDBConnection(self.db_path)
+        self.assertFalse(conn.close_on_exit)
+        conn.close()
+
+    def test_del_closes_only_detached_instance(self):
+        """析构不关闭仍被注册表共享的连接；脱离注册表后释放句柄"""
+        import gc
+
+        conn = DuckDBConnection(self.db_path)
+        conn.connect()
+        alias = DuckDBConnection(self.db_path)
+
+        del conn
+        gc.collect()
+        self.assertEqual(alias.connect().execute("SELECT 1").fetchone()[0], 1)
+
+        # 模拟 teardown：注册表清空后析构应关闭连接，文件可删除
+        DuckDBConnection._instances.clear()
+        del alias
+        gc.collect()
+        os.remove(self.db_path)
+
     def test_multiple_configs_persist(self):
         """测试多个配置项在跨 with 块后持久化"""
         conn = DuckDBConnection(self.db_path, read_only=False, close_on_exit=False)

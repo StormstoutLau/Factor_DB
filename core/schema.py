@@ -603,9 +603,8 @@ class SchemaManager:
         pk_list = ', '.join(pk_cols[table_name])
         table_ident = quote_identifier(table_name)
 
-        sql = f'''
-            DELETE FROM {table_ident}
-            WHERE ({pk_list}, loaded_at) NOT IN (
+        predicate = f'''
+            ({pk_list}, loaded_at) NOT IN (
                 SELECT {pk_list}, MAX(loaded_at)
                 FROM {table_ident}
                 WHERE loaded_at < $keep_before
@@ -616,11 +615,19 @@ class SchemaManager:
 
         try:
             with self.conn as conn:
-                conn.execute(sql, {'keep_before': keep_before})
-            # 获取删除行数（DuckDB 不直接返回，用查询统计）
-            # 简单返回成功标记
-            logger.info(f"表 {table_name} 历史数据清理完成 (cutoff: {keep_before})")
-            return 1
+                # 先统计再删除：避免 DELETE ... RETURNING 在百万行级别物化结果集
+                deleted = conn.execute(
+                    f"SELECT COUNT(*) FROM {table_ident} WHERE {predicate}",
+                    {'keep_before': keep_before},
+                ).fetchone()[0]
+                conn.execute(
+                    f"DELETE FROM {table_ident} WHERE {predicate}",
+                    {'keep_before': keep_before},
+                )
+            logger.info(
+                f"表 {table_name} 历史数据清理完成 (cutoff: {keep_before}, 删除 {deleted} 行)"
+            )
+            return int(deleted)
         except Exception as e:
             logger.error(f"表 {table_name} 清理失败: {e}")
             return 0

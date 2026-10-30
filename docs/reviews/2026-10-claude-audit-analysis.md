@@ -121,5 +121,9 @@
 | HIGH 1（SQL 拼接） | ✅ 已修复 | `utils/sql_utils.py` + 7 个查询模块命名参数 + schema 迁移/DDL 白名单转义 | `test_sql_safety.py`；266 passed |
 | HIGH 2（README / 宽表入口） | ✅ 已修复 | README 宽矩阵示例；长表/空表/非法名 → `ValueError` | `test_wide_loader.py` 3 项 |
 | HIGH 3（硬编码） | ✅ 已修复 | `LoaderConfig` env 化；脚本 `ASHARE_DATA_PATH` + `financial_factors` + `rglob`；辅助脚本路径全部 env 化 | `TestLoaderConfigEnv`；101 因子文件可发现 |
+| MEDIUM 1（P2 单例生命周期） | ✅ 已修复 `2026-10-30` | `close_on_exit: Optional[bool]`（`None` 沿用已有配置、显式传值可更新）；`__del__` 仅关闭已脱离 `_instances` 的实例 | `test_connection.py` 3 项 |
+| MEDIUM 2（P2 缓存） | ✅ 已修复 `2026-10-30` | `OrderedDict` 真 LRU（命中 `move_to_end` / 淘汰 `popitem(last=False)`）+ `utils/data_version.py` 写后失效（`__exit__` 与写语句 `execute` 双钩子，版本不符即 miss） | `test_cache.py` 4 项 |
+| LOW（P3 打包与整洁） | ✅ 已修复 `2026-10-30` | MIT `LICENSE`；`pyproject` 补 `license` 与 `[project.scripts] factor-db`；删除 0 字节 `test_pivot_optimization.py`；`compact_table` 返回实际删除行数 | `test_packaging.py` 3 项；`test_pit` 精确断言 |
 
-详见 [调研](../research/high_fixes_research.md) / [设计](../design/high_fixes_design.md) / [实施](../implementation/high_fixes_implementation.md)。
+详见 [调研](../research/high_fixes_research.md) / [设计](../design/high_fixes_design.md) / [实施](../implementation/high_fixes_implementation.md)；
+P2/P3 见 [调研](../research/p2_p3_closure_research.md) / [设计](../design/p2_p3_closure_design.md) / [实施](../implementation/p2_p3_closure_implementation.md) / [ADR-0010](../adr/0010-cache-invalidation-singleton-lifecycle.md)。

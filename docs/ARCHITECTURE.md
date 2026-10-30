@@ -55,7 +55,7 @@ Factor_DB/
 │   ├── alternative_query.py # 另类数据查询
 │   ├── screen.py            # 条件选股
 │   ├── osint_query.py       # OSINT 查询
-│   └── cache.py             # LRU 查询缓存
+│   └── cache.py             # LRU 查询缓存（数据版本失效）
 ├── adapters/                # 适配器层
 │   ├── factor_calculator.py # 因子计算
 │   ├── engine_adapter.py    # 回测引擎适配
@@ -73,7 +73,7 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（266 测试）
+├── tests/                   # 测试套件（305 测试）
 ├── benchmarks/              # 基准测试
 ├── cli.py                   # CLI（7 子命令）
 └── docs/                    # 文档（含 spec/adr）
@@ -86,7 +86,7 @@ Factor_DB/
     ↓
 适配器层 (adapters)
     ↓
-查询层 (query)          ← 只读连接 + LRU 缓存
+查询层 (query)          ← 只读连接 + LRU 缓存（写后失效）
     ↓
 核心层 (core: connection / schema)   ← 读写分离
     ↓
@@ -189,7 +189,7 @@ BaseLoader.write_factor_long() 单事务双写
 ### 5.2 查询流程
 ```
 用户请求 → BaseQuery 参数解析 → 构建 SQL（含 PIT 子查询）
-    → DuckDB 只读连接执行 → LRU 缓存 → 返回 DataFrame
+    → DuckDB 只读连接执行 → LRU 缓存（数据版本不符即失效）→ 返回 DataFrame
 ```
 
 ---

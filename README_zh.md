@@ -45,7 +45,7 @@ Factor_DB/
 │   ├── logger.py            # 日志配置（彩色输出、文件记录）
 │   ├── config.py            # 配置管理（JSON/环境变量）
 │   └── validators.py        # 数据验证（价格/因子/Level 1）
-├── tests/                   # 测试套件（266 个测试用例，全部通过）
+├── tests/                   # 测试套件（305 个测试用例，全部通过）
 ├── benchmarks/              # 性能基准测试
 ├── docs/                    # 文档
 │   ├── ARCHITECTURE.md      # 架构设计文档

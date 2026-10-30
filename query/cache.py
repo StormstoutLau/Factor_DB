@@ -2,19 +2,27 @@
 查询缓存模块
 
 提供 SQL 查询结果缓存，减少重复查询开销。
+
+缓存策略：
+    - LRU 淘汰：命中时刷新条目位置，容量超限淘汰最久未使用条目
+    - TTL 过期：条目写入超过 ttl 秒后失效
+    - 写后失效：数据版本号在写入时递增，版本不符的条目视为失效
 """
 
 import hashlib
 import time
+from collections import OrderedDict
 from typing import Optional
 
 import pandas as pd
+
+from Factor_DB.utils.data_version import current_version
 
 
 class QueryCache:
     """SQL 查询结果缓存
 
-    基于 MD5 哈希的查询结果缓存，支持 TTL 过期和 LRU 淘汰。
+    基于 MD5 哈希的查询结果缓存，支持 TTL 过期、LRU 淘汰与写后失效。
 
     Attributes:
         max_size: 最大缓存条目数
@@ -24,7 +32,8 @@ class QueryCache:
     def __init__(self, max_size: int = 1000, ttl: int = 300):
         self.max_size = max_size
         self.ttl = ttl
-        self._cache: dict[str, tuple[float, pd.DataFrame]] = {}
+        # key -> (写入时间, 写入时数据版本, DataFrame)
+        self._cache: "OrderedDict[str, tuple[float, int, pd.DataFrame]]" = OrderedDict()
         self._hits = 0
         self._misses = 0
 
@@ -35,16 +44,17 @@ class QueryCache:
             sql: 查询 SQL
 
         Returns:
-            缓存的 DataFrame 副本，未命中返回 None
+            缓存的 DataFrame 副本，未命中/过期/数据已变更返回 None
         """
         key = hashlib.md5(sql.encode()).hexdigest()
-        if key in self._cache:
-            ts, df = self._cache[key]
-            if time.time() - ts < self.ttl:
+        entry = self._cache.get(key)
+        if entry is not None:
+            ts, version, df = entry
+            if time.time() - ts < self.ttl and version == current_version():
+                self._cache.move_to_end(key)  # 命中即最近使用
                 self._hits += 1
                 return df.copy()
-            else:
-                del self._cache[key]
+            del self._cache[key]
         self._misses += 1
         return None
 
@@ -56,10 +66,11 @@ class QueryCache:
             df: 查询结果
         """
         key = hashlib.md5(sql.encode()).hexdigest()
-        if len(self._cache) >= self.max_size:
-            oldest = min(self._cache, key=lambda k: self._cache[k][0])
-            del self._cache[oldest]
-        self._cache[key] = (time.time(), df.copy())
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        elif len(self._cache) >= self.max_size:
+            self._cache.popitem(last=False)  # 淘汰最久未使用
+        self._cache[key] = (time.time(), current_version(), df.copy())
 
     def clear(self) -> None:
         """清空缓存"""

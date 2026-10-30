@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "factor-db"
 version = "1.0.0"
 description = "Factor_DB - 因子数据库模块（DuckDB）"
+license = {text = "MIT"}
 requires-python = ">=3.9"
 dependencies = [
     "duckdb>=0.10.0",
@@ -20,6 +21,9 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "akshare>=1.14.0",
 ]
+
+[project.scripts]
+factor-db = "Factor_DB.cli:main"
 
 [tool.setuptools.packages.find]
 where = [".."]

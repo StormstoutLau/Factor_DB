@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### P2/P3 评审遗留项闭环（2026-10-30）
+- **背景**: [Claude 评审核实分析](reviews/2026-10-claude-audit-analysis.md) §五 中 MEDIUM 1/2（缓存非真 LRU、无写后失效、单例 `close_on_exit` 冲突）与 LOW 4 项此前仅登记未修复
+- **关键事实修正**: loader 与 `SchemaManager` 的写操作经 `with self.conn` 拿到原生 duckdb 连接，单靠 `DuckDBConnection.execute()` 识别写语句会漏掉主写入路径
+- **缓存**: `QueryCache` 改 `OrderedDict` 真 LRU（命中 `move_to_end`、淘汰 `popitem(last=False)`）；新增 `utils/data_version.py` 全局版本号，写连接 `__exit__` 与写语句 `execute` 递增版本，版本不符即 miss（TTL 保留）
+- **单例**: `close_on_exit` 改 `Optional[bool]`（`None` 沿用已有配置，显式传值可更新）；`__del__` 仅关闭已脱离 `_instances` 的实例，避免销毁共享连接
+- **compact**: `compact_table` 改为同谓词 `SELECT COUNT(*)` + `DELETE`，返回实际删除行数（避免 `DELETE ... RETURNING` 在百万行级物化结果集）
+- **打包**: 新增 MIT `LICENSE`；`pyproject` 补 `license` 与 `[project.scripts] factor-db = "Factor_DB.cli:main"`；删除 0 字节 `tests/test_pivot_optimization.py`
+- **测试**: 红 7 failed → 绿；定向 37 passed，全量 **305 passed**（原 295）
+- **文档**: [调研](research/p2_p3_closure_research.md) / [设计](design/p2_p3_closure_design.md) / [实施](implementation/p2_p3_closure_implementation.md) / [ADR-0010](adr/0010-cache-invalidation-singleton-lifecycle.md) / checklist 第十一节；ARCHITECTURE 缓存表述与测试数同步
+
 ### DB 压缩重建与备份表清理（2026-10-26）
 - **背景**: `factor_history` 重排后 DB 93.43 GiB，其中 free blocks 35.3 GiB；另存 1,683,530,224 行的迁移备份表
 - **对账门**: 241 个宽表因子，备份表与 `factor_history` 行数逐一比对 → **1,683,530,224 = 1,683,530,224，0 差异**
@@ -180,14 +190,17 @@
 | 2026-06 | Level 1 Parquet（ADR-0005） | ✅ |
 | 2026-07 | NULL 空壳行修复（ADR-0006） | ✅ |
 | 2026-07 | 数据源合并（ADR-0007） | ✅ |
-| 2026-10 | 双轨迁移安全化（ADR-0008） | ✅ 代码完成，生产迁移待执行 |
+| 2026-10 | 双轨迁移安全化（ADR-0008） | ✅ 已接受 |
+| 2026-10 | CSMAR 批量因子仅写长表（ADR-0009） | ✅ 已接受 |
+| 2026-10 | 缓存失效与单例生命周期（ADR-0010） | ✅ 已接受 |
 
 ---
 
 ## 当前待办（Backlog）
 
-- **[P0]** `factor_data` 主键缺失（需 >26GB 内存机器）
-- **[P0]** 双轨迁移未在生产库执行
-- **[P2]** Level 1 历史导入未完成（`level1_snapshots` 0 行）
-- **[P2]** CSMAR 因子导入
-- 文档体系规范化（本日志 + spec + adr）
+- ~~**[P0]** `factor_data` 主键缺失~~ → 2026-10-23 双轨迁移完成（ADR-0004/0008）
+- ~~**[P0]** 双轨迁移未在生产库执行~~ → 2026-10-23 完成（9,307,121 行宽表）
+- ~~**[P2]** Level 1 历史导入未完成~~ → 2026-10-23 完成（2,250 分区 / 21.07 亿行）
+- ~~**[P2]** CSMAR 因子导入~~ → 2026-10-24 完成（5,439 因子 / 35.20 亿行）
+- ~~**[P2/P3]** Claude 评审遗留（缓存 LRU/失效、单例生命周期、LICENSE、scripts、空测试、compact 返回值）~~ → 2026-10-30 闭环（ADR-0010）
+- 文档体系规范化（本日志 + spec + adr）→ 已完成
