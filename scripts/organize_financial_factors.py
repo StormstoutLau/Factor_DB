@@ -11,7 +11,7 @@ old_dir = os.path.join(BASE, "财务指标因子")
 new_dir = os.path.join(BASE, "financial_factors")
 if os.path.exists(old_dir) and not os.path.exists(new_dir):
     os.rename(old_dir, new_dir)
-    print(f"Renamed: 财务指标因子 -> financial_factors")
+    print("Renamed: 财务指标因子 -> financial_factors")
 elif os.path.exists(new_dir):
     print("financial_factors already exists")
 else:

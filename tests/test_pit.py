@@ -7,9 +7,7 @@ PIT (Point-in-Time) 数据版本管理测试
 import os
 import tempfile
 import unittest
-from datetime import date, datetime, timedelta
 
-import pandas as pd
 
 from Factor_DB.core.connection import DuckDBConnection
 from Factor_DB.core.schema import SchemaManager

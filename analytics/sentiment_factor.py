@@ -14,7 +14,6 @@ from datetime import date
 from typing import Optional, List
 
 import pandas as pd
-import numpy as np
 
 from Factor_DB.query.sentiment_query import SentimentQuery
 from Factor_DB.query.factor_query import FactorQuery

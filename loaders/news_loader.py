@@ -12,7 +12,7 @@ from typing import Union, Optional
 
 import pandas as pd
 
-from .base import BaseLoader, LoaderConfig
+from .base import BaseLoader
 
 logger = logging.getLogger(__name__)
 

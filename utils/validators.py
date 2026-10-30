@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 import pandas as pd

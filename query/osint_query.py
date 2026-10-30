@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import pandas as pd
 
-from Factor_DB.core.connection import DuckDBConnection
-from Factor_DB.utils.sql_utils import bind, bind_in
+from Factor_DB.utils.sql_utils import bind_in
 
 from .base import BaseQuery
 

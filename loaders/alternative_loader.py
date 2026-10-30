@@ -9,11 +9,11 @@ from __future__ import annotations
 import logging
 import json
 from pathlib import Path
-from typing import Union, Optional, Dict, Any
+from typing import Union, Optional
 
 import pandas as pd
 
-from .base import BaseLoader, LoaderConfig
+from .base import BaseLoader
 
 logger = logging.getLogger(__name__)
 

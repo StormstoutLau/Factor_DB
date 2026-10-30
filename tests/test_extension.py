@@ -10,7 +10,6 @@ import unittest
 from datetime import date
 
 import pandas as pd
-import numpy as np
 
 from Factor_DB.core.connection import DuckDBConnection
 from Factor_DB.core.schema import SchemaManager

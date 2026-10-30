@@ -5,7 +5,6 @@ Delete original CSV after conversion.
 """
 import os
 import pandas as pd
-import shutil
 
 BASE = os.path.join(os.getenv('ASHARE_DATA_PATH', r"E:\Ashare_data"), "raw_fundamentals")
 

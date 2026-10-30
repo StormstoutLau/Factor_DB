@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-from datetime import date, timedelta
+from datetime import date
 
 import duckdb
 import numpy as np
@@ -182,7 +182,7 @@ def run_benchmark(n_dates: int = 252, n_stocks: int = 500):
         n_stocks: 股票数量
     """
     print(f"\n{'='*60}")
-    print(f"Factor_DB 性能基准测试")
+    print("Factor_DB 性能基准测试")
     print(f"数据规模: {n_dates} 天 × {n_stocks} 只股票 = {n_dates * n_stocks:,} 条记录")
     print(f"{'='*60}\n")
 

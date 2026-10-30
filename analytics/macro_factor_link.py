@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 import pandas as pd
-import numpy as np
 
 from Factor_DB.query.macro_query import MacroQuery
 from Factor_DB.query.factor_query import FactorQuery

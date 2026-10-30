@@ -8,14 +8,12 @@ OSINT 数据管道
 from __future__ import annotations
 
 import logging
-from datetime import date
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from Factor_DB.core.connection import DuckDBConnection
 from Factor_DB.core.metadata_manager import MetadataManager
-from .base import BaseCollector, CollectorConfig, OSINTEvent, OSINTEventType
+from .base import CollectorConfig, OSINTEvent, OSINTEventType
 from .registry import CollectorRegistry
 
 logger = logging.getLogger(__name__)

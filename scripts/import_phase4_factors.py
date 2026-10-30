@@ -18,7 +18,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.connection import DuckDBConnection
 from loaders.base import LoaderConfig
 from loaders.daily_loader import DailyLoader
 
@@ -92,7 +91,7 @@ def main():
                 success += 1
                 print(f"  OK: {count:,} rows")
             else:
-                print(f"  WARN: 0 rows (all NaN?)")
+                print("  WARN: 0 rows (all NaN?)")
         except Exception as e:
             print(f"  FAIL: {e}")
             failed.append(factor_name)

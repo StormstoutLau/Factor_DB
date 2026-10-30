@@ -54,7 +54,6 @@ class TestNormalizeStockCode(unittest.TestCase):
 
     def test_normalize_nan(self):
         """NaN 值"""
-        import math
         self.assertEqual(normalize_stock_code(float('nan')), '')
 
 

@@ -313,3 +313,30 @@
 - [x] DEVLOG / ADR-0011 / ADR 索引 / 本 checklist 同步
 - [x] 文档一致性：ADR 编号 0001~0011；ADR 计数 11
 
+## 十三、工程化基线 + IC 衰减分析 + 根目录清理（2026-10-30）
+
+来源：[工程化基线调研](../research/engineering_baseline_research.md) / [设计](../design/engineering_baseline_design.md) / [实施](../implementation/engineering_baseline_implementation.md) · [IC 衰减调研](../research/ic_decay_research.md) / [设计](../design/ic_decay_design.md) / [实施](../implementation/ic_decay_implementation.md)
+
+### 工程化基线
+- [x] `pyproject.toml` 新增 `[project.optional-dependencies] dev`（pytest / ruff）与 `[tool.ruff]` 保守规则集 `E4,E7,E9,F`
+- [x] `.github/workflows/ci.yml`：push / PR 触发，Ubuntu + Python 3.12，`pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
+- [x] ruff 全仓 73 → 0（67 项自动修复 + 6 项人工处理；DuckDB `FROM df` 变量保留 `# noqa: F841`）
+- [x] 新增 `tests/test_cli.py`（5 用例）守护 CLI 冒烟
+- [x] **真实缺陷**：`cmd_query` / `cmd_list_factors` 使用 `fetchdf(sql)`，DuckDB 1.x 直接报 `TypeError`；修复为 `execute(sql).fetchdf()`
+- [x] `cli.py:main(argv=None)` 可注入参数，便于测试；`date` → `datetime` 导入修正
+
+### IC 衰减分析（ADR-0011 口径）
+- [x] 协议设计：`get_ic_decay(factor_name, periods=(1,2,3,5,10,20), start_date, end_date)`
+- [x] 红测试先行：`AttributeError: no attribute 'get_ic_decay'` + CLI `SystemExit: 2`
+- [x] 实现：同一窗口逐 horizon 复用 `get_ic_series`，输出 `forward_return_days / periods / ic_mean / ic_std(ddof=1) / ic_ir`
+- [x] `tests/test_ic_decay.py` 4 passed（曲线形态、与 `get_ic_series` 一致、空 periods 抛错、CLI 渲染）
+- [x] CLI 新增 `ic-decay` 子命令（`--factor` 必填，`--days` 默认 `1,2,3,5,10,20`）
+- [x] 生产只读实测（2024Q1，`LT_debt_ratio`）：IC 均值 0.0176 / 0.0250 / 0.0336 / 0.0247 / 0.0264，5 日附近达峰，约 1.5 s
+
+### 根目录清理
+- [x] 删除 `factor_data_export.parquet`（0.47 GB，已被 `.gitignore` 忽略，可重生成）
+
+### 回归与文档
+- [x] 全量 `pytest`：**319 passed**；`ruff check .` All checks passed
+- [x] DEVLOG 新增条目；ARCHITECTURE IC 章节补 `get_ic_decay` 口径；README / README_zh 测试数 310 → 319 并补两行测试表
+

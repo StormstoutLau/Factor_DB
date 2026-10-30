@@ -466,6 +466,50 @@ class FactorQuery(BaseQuery):
         logger.debug(f"IC 计算完成: {factor_name}, {len(df)} 期")
         return df
 
+    def get_ic_decay(
+        self,
+        factor_name: str,
+        periods: tuple[int, ...] = (1, 2, 3, 5, 10, 20),
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> pd.DataFrame:
+        """计算 IC 衰减曲线
+
+        对每个前向持有期 h 调用 `get_ic_series`，汇总 IC 均值、标准差与 ICIR。
+        区间固定为 [start_date, end_date]，h 越大末段可用期数越少（前瞻收益需要
+        区间之外的价格，未纳入部分会被丢弃，属预期行为）。
+
+        Args:
+            factor_name: 因子名称
+            periods: 前向收益天数集合，仅保留 >= 1 的值
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            DataFrame(forward_return_days, periods, ic_mean, ic_std, ic_ir)
+        """
+        horizons = sorted({int(p) for p in periods if int(p) >= 1})
+        if not horizons:
+            raise ValueError('periods 至少包含一个 >= 1 的前向天数')
+
+        rows = []
+        for days in horizons:
+            ic_df = self.get_ic_series(factor_name, days, start_date, end_date)
+            ic = ic_df['ic'] if not ic_df.empty else pd.Series(dtype=float)
+            ic_mean = float(ic.mean()) if len(ic) else float('nan')
+            ic_std = float(ic.std(ddof=1)) if len(ic) > 1 else float('nan')
+            rows.append({
+                'forward_return_days': days,
+                'periods': len(ic),
+                'ic_mean': ic_mean,
+                'ic_std': ic_std,
+                'ic_ir': ic_mean / ic_std if ic_std else float('nan'),
+            })
+
+        decay = pd.DataFrame(rows)
+        logger.debug(f"IC 衰减计算完成: {factor_name}, horizons={horizons}")
+        return decay
+
     def list_factors(self) -> list[str]:
         """列出所有可用因子
 

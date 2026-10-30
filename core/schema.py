@@ -1095,7 +1095,7 @@ class SchemaManager:
                     return wide_count
 
                 # 历史表：保留所有版本
-                hist_sql = f'''
+                hist_sql = '''
                     INSERT INTO factor_history (trade_date, stock_code, factor_name, factor_value, loaded_at)
                     SELECT
                         trade_date,

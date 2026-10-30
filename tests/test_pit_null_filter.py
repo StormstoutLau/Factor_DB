@@ -13,7 +13,6 @@ import os
 from datetime import date, datetime
 
 import pandas as pd
-import numpy as np
 
 from Factor_DB.core.connection import DuckDBConnection
 from query.price_query import PriceQuery
@@ -97,7 +96,7 @@ class TestPITNullFiltering(unittest.TestCase):
                         'loaded_at': datetime(2024, 1, 12, 10, 0, 0)
                     })
 
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame(rows)  # noqa: F841 - 供 DuckDB 的 FROM df 引用
             c.execute("INSERT INTO daily_prices SELECT * FROM df")
 
         conn.close()

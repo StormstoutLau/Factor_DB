@@ -14,7 +14,6 @@ from datetime import date
 from typing import Optional, List, Dict
 
 import pandas as pd
-import numpy as np
 
 from Factor_DB.query.price_query import PriceQuery
 from Factor_DB.query.factor_query import FactorQuery

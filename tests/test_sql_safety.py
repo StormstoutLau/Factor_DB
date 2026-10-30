@@ -14,7 +14,6 @@ import tempfile
 import unittest
 from datetime import date
 
-import pandas as pd
 
 from Factor_DB.core.connection import DuckDBConnection
 from Factor_DB.core.schema import SchemaManager

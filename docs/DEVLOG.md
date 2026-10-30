@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### 工程化基线 + IC 衰减分析 + 根目录清理（2026-10-30）
+- **CI**: 新增 [.github/workflows/ci.yml](../.github/workflows/ci.yml)（push/PR → `ruff check .` + `pytest`，Ubuntu / Python 3.12 / `pip install -e ".[dev]"`）
+- **静态检查**: `pyproject.toml` 新增 dev extras（pytest/ruff）与 ruff 保守规则集（`E4,E7,E9,F`）；`ruff --fix` 清理 67 项未使用导入/空 f-string，人工处理 6 个 F841（DuckDB `FROM df` 引用，加 `# noqa`）
+- **真实缺陷**: 新增 CLI 测试立即暴露 `cmd_query` / `cmd_list_factors` 调用 `c.fetchdf(sql)` 在 DuckDB 1.x 报 `TypeError`（两条命令生产不可用）→ 改为 `execute(...).fetchdf()`；`main(argv=None)` 可测试化
+- **测试**: 新增 `tests/test_cli.py`（5）与 `tests/test_ic_decay.py`（4）；全量 **319 passed**（110 s），`ruff` 零告警
+- **IC 衰减**: 新增 `FactorQuery.get_ic_decay`（复用 `get_ic_series`，返回 `forward_return_days/periods/ic_mean/ic_std/ic_ir`）与 CLI `factor-db ic-decay`
+- **生产验证**: `LT_debt_ratio` 2024Q1 五个 horizon，IC 在 5 日附近达峰（0.0336），57→38 期，总耗时约 1.5 s
+- **清理**: 删除根目录 `factor_data_export.parquet`（0.47 GB，已被 `.gitignore` 忽略）
+- **文档**: [调研](../docs/research/engineering_baseline_research.md) / [设计](../docs/design/engineering_baseline_design.md) / [实施](../docs/implementation/engineering_baseline_implementation.md)；[IC 衰减调研](../docs/research/ic_decay_research.md) / [设计](../docs/design/ic_decay_design.md) / [实施](../docs/implementation/ic_decay_implementation.md)；checklist 第十三节
+
 ### 生产库端到端验收 + IC 查询路径修复（2026-10-30）
 - **背景**: 306 个测试全部基于临时库，46 GiB 生产库从未被测试路径覆盖（[调研](research/prod_e2e_validation_research.md)）
 - **真实缺陷**: `get_ic_series` 第一轮走 `factor_data`（241 列 UNPIVOT 视图）OOM；改用 `factor_history` 后第二轮仍 OOM，隔离定位到 `daily_prices` 自连接 + `MIN(trade_date)` 相关子查询（36.69 s 后 `Allocation failure`）

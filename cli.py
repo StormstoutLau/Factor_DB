@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 
@@ -87,7 +87,7 @@ def cmd_query(args):
 
     conn = DuckDBConnection(args.db, read_only=True)
     with conn as c:
-        df = c.fetchdf(args.sql)
+        df = c.execute(args.sql).fetchdf()
         print(df.to_string(index=False))
     conn.close()
 
@@ -98,9 +98,9 @@ def cmd_list_factors(args):
 
     conn = DuckDBConnection(args.db, read_only=True)
     with conn as c:
-        df = c.fetchdf(
+        df = c.execute(
             "SELECT DISTINCT factor_name FROM factor_data ORDER BY factor_name"
-        )
+        ).fetchdf()
         if df.empty:
             print("无因子数据")
         else:
@@ -131,7 +131,25 @@ def cmd_compact(args):
     print(f"清理完成 (cutoff: {args.before})")
 
 
-def main():
+def _parse_date(value):
+    """解析 YYYY-MM-DD 日期参数"""
+    return datetime.strptime(value, '%Y-%m-%d').date()
+
+
+def cmd_ic_decay(args):
+    """计算 IC 衰减曲线"""
+    from Factor_DB.query.factor_query import FactorQuery
+
+    periods = tuple(int(p) for p in args.days.split(',') if p.strip())
+    query = FactorQuery(args.db)
+    df = query.get_ic_decay(
+        args.factor, periods, start_date=args.start, end_date=args.end
+    )
+    print(df.to_string(index=False))
+    query.conn.close()
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Factor_DB - 量化金融数据管理系统',
         prog='factor-db'
@@ -162,7 +180,17 @@ def main():
     p_list.add_argument('--db', default='factor_db.duckdb', help='数据库路径')
 
     # cache-clear
-    p_cache = subparsers.add_parser('cache-clear', help='清空缓存')
+    subparsers.add_parser('cache-clear', help='清空缓存')
+
+    # ic-decay
+    p_icd = subparsers.add_parser('ic-decay', help='计算 IC 衰减曲线')
+    p_icd.add_argument('--db', default='factor_db.duckdb', help='数据库路径')
+    p_icd.add_argument('--factor', required=True, help='因子名称')
+    p_icd.add_argument(
+        '--days', default='1,2,3,5,10,20', help='前向收益天数，逗号分隔'
+    )
+    p_icd.add_argument('--start', type=_parse_date, help='开始日期 YYYY-MM-DD')
+    p_icd.add_argument('--end', type=_parse_date, help='结束日期 YYYY-MM-DD')
 
     # compact
     p_compact = subparsers.add_parser('compact', help='清理旧版本数据')
@@ -172,7 +200,7 @@ def main():
         help='截止日期 (YYYY-MM-DD)，保留此日期之前每个主键的最新版本'
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command is None:
         parser.print_help()
@@ -186,6 +214,7 @@ def main():
         'list-factors': cmd_list_factors,
         'cache-clear': cmd_cache_clear,
         'compact': cmd_compact,
+        'ic-decay': cmd_ic_decay,
     }
 
     handlers[args.command](args)

@@ -7,9 +7,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 import pandas as pd
 from tqdm import tqdm

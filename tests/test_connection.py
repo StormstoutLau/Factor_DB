@@ -8,7 +8,6 @@ import os
 import tempfile
 import threading
 import unittest
-from pathlib import Path
 
 from Factor_DB.core.connection import DuckDBConnection
 

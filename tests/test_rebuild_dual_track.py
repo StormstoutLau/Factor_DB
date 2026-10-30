@@ -54,7 +54,7 @@ class TestRebuildDualTrack(unittest.TestCase):
                 'trade_date': dates[0], 'stock_code': '000001', 'factor_name': 'factor_a',
                 'factor_value': 2.0, 'loaded_at': pd.Timestamp('2024-03-01'),
             })
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame(rows)  # noqa: F841 - 供 DuckDB 的 FROM df 引用
             c.execute('INSERT INTO factor_data SELECT * FROM df')
         conn.close()
 

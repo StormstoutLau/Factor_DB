@@ -270,7 +270,7 @@ class MacroQuery(BaseQuery):
             每个日期的宏观环境标签
         """
         # 获取关键宏观指标
-        sql = f'''
+        sql = '''
             SELECT trade_date, indicator_id, value
             FROM macro_data
             WHERE indicator_id IN ('PMI', 'CPI_yoy', 'M2_yoy')

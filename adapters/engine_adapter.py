@@ -8,13 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-from Factor_DB.core.connection import DuckDBConnection
 from Factor_DB.query.price_query import PriceQuery
 from Factor_DB.query.factor_query import FactorQuery
 

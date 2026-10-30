@@ -10,11 +10,11 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 
-from ..base import BaseCollector, CollectorConfig, OSINTEventType
+from ..base import BaseCollector, OSINTEventType
 
 logger = logging.getLogger(__name__)
 

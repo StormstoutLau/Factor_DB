@@ -12,12 +12,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Union, Optional
-from datetime import date
 
 import pandas as pd
 
-from .base import BaseLoader, LoaderConfig
-from Factor_DB.utils.validators import DataValidator
+from .base import BaseLoader
 
 logger = logging.getLogger(__name__)
 

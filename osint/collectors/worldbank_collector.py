@@ -8,12 +8,11 @@ World Bank 开放数据收集器
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
-from datetime import date
 
-from ..base import BaseCollector, CollectorConfig, OSINTEventType
+from ..base import BaseCollector, OSINTEventType
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,6 @@
 import os
 import tempfile
 import unittest
-from datetime import date
 
 import pandas as pd
 

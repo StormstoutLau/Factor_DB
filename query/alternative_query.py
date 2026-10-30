@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, Optional, List
+from typing import Any, Optional
 
 import pandas as pd
 
 from Factor_DB.utils.sql_utils import bind, validate_identifier
 
-from .base import BaseQuery, QueryFilter
+from .base import BaseQuery
 
 logger = logging.getLogger(__name__)
 

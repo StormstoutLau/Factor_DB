@@ -349,7 +349,7 @@ class TestFactorWideSchema(unittest.TestCase):
             FROM range({total_wide_rows}) t(row)
         """)
 
-        mem_db.execute(f"""
+        mem_db.execute("""
             CREATE TABLE factor_long_test (
                 trade_date DATE,
                 stock_code VARCHAR,

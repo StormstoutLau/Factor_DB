@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from Factor_DB.core.connection import DuckDBConnection
 from Factor_DB.core.schema import SchemaManager
-from loaders.base import LoaderConfig, BaseLoader
+from loaders.base import LoaderConfig
 from loaders.level1_loader import Level1Loader
 
 logger = logging.getLogger(__name__)

@@ -12,7 +12,6 @@ import os
 from unittest import mock
 
 import pandas as pd
-import numpy as np
 
 from Factor_DB.core.connection import DuckDBConnection
 from Factor_DB.core.schema import SchemaManager, MigrationError
@@ -60,7 +59,7 @@ class TestFactorDataMigration(unittest.TestCase):
                         rows.append({'trade_date': d, 'stock_code': s, 'factor_name': f,
                                      'factor_value': float(i + 0.5), 'loaded_at': None})
 
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame(rows)  # noqa: F841 - 供 DuckDB 的 FROM df 引用
             c.execute("INSERT INTO factor_data SELECT * FROM df")
 
         conn.close()
@@ -73,6 +72,7 @@ class TestFactorDataMigration(unittest.TestCase):
         conn.connect()
         schema = SchemaManager(conn)
         stats = schema.migrate_factor_data_to_wide(batch_size=3)
+        self.assertEqual({'pe_ratio', 'pb_ratio', 'market_cap'}, set(stats))
         conn.close()
 
         DuckDBConnection._instances.clear()
@@ -282,7 +282,7 @@ class TestMigrationSafety(unittest.TestCase):
                                      'factor_value': float(i + 1), 'loaded_at': None})
                         rows.append({'trade_date': d, 'stock_code': s, 'factor_name': f,
                                      'factor_value': float(i + 0.5), 'loaded_at': None})
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame(rows)  # noqa: F841 - 供 DuckDB 的 FROM df 引用
             c.execute("INSERT INTO factor_data SELECT * FROM df")
         conn.close()
 
