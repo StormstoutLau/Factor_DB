@@ -7,6 +7,22 @@
 
 ## 2026-10（最近）
 
+### 生产库端到端验收 + IC 查询路径修复（2026-10-30）
+- **背景**: 306 个测试全部基于临时库，46 GiB 生产库从未被测试路径覆盖（[调研](research/prod_e2e_validation_research.md)）
+- **真实缺陷**: `get_ic_series` 第一轮走 `factor_data`（241 列 UNPIVOT 视图）OOM；改用 `factor_history` 后第二轮仍 OOM，隔离定位到 `daily_prices` 自连接 + `MIN(trade_date)` 相关子查询（36.69 s 后 `Allocation failure`）
+- **修复**（ADR-0011）: IC 数据源固定 `factor_history`（EAV，按 `factor_name` 物理排序）；前瞻收益改 `LEAD(close, days) OVER (PARTITION BY stock_code ORDER BY trade_date)`；`forward_return_days` 参数生效
+- **红→绿**: `test_ic_series_reads_history_not_view`（红灯 `CatalogException: factor_data does not exist`）→ 定向 `test_wide_query.py` 12 passed
+- **验收脚本**: 新增 `scripts/validate_production.py`（只读，S1 结构/行数、S2 宽表矩阵、S3 history+PIT、S4 价格、S5 IC；JSON+Markdown 报告，硬性/软性判定分离）
+- **测试**: 新增 `tests/test_validate_production.py` 4 个（正常/缺表/报告渲染/IC 区间越界降级）
+- **生产实跑**: `E2E_VALIDATION=OK`，总耗时 2.44 s
+  - S1 0.10 s（18 对象；wide 9,307,121 / history 5,203,062,078 / daily 43,226,352）
+  - S2 0.34 s（8 因子 × 373,029 行，非空率 67.1%）
+  - S3 1.29 s（`STK_MKT_DGTWBREAKPOINTS_MomMax` 250 行；PIT 323,445 行一致）
+  - S4 0.54 s（`get_daily` 464 行；`get_price_matrix` 58×2）
+  - S5 0.17 s（`LT_debt_ratio` 57 期，IC 均值 0.017640）
+- **报告**: [JSON](reports/prod_e2e_validation_2026-10-30.json) / [Markdown](reports/prod_e2e_validation_2026-10-30.md)
+- **文档**: [调研](research/prod_e2e_validation_research.md) / [设计](design/prod_e2e_validation_design.md) / [实施](implementation/prod_e2e_validation_implementation.md) / [ADR-0011](adr/0011-ic-query-path-fix.md) / checklist 第十二节；ARCHITECTURE §4 增补 IC 路径约束
+
 ### P2/P3 评审遗留项闭环（2026-10-30）
 - **背景**: [Claude 评审核实分析](reviews/2026-10-claude-audit-analysis.md) §五 中 MEDIUM 1/2（缓存非真 LRU、无写后失效、单例 `close_on_exit` 冲突）与 LOW 4 项此前仅登记未修复
 - **关键事实修正**: loader 与 `SchemaManager` 的写操作经 `with self.conn` 拿到原生 duckdb 连接，单靠 `DuckDBConnection.execute()` 识别写语句会漏掉主写入路径
@@ -186,13 +202,14 @@
 | 2026-06 | DuckDB 引擎选型（ADR-0001） | ✅ |
 | 2026-06 | EAV 长表模型（ADR-0002） | ✅（后被 0004 修订） |
 | 2026-06 | PIT 版本管理（ADR-0003） | ✅ |
-| 2026-06 | 宽表+长表双轨（ADR-0004） | ⚠️ 代码完成，未迁移 |
+| 2026-06 | 宽表+长表双轨（ADR-0004） | ✅ 已迁移（2026-10-23） |
 | 2026-06 | Level 1 Parquet（ADR-0005） | ✅ |
 | 2026-07 | NULL 空壳行修复（ADR-0006） | ✅ |
 | 2026-07 | 数据源合并（ADR-0007） | ✅ |
 | 2026-10 | 双轨迁移安全化（ADR-0008） | ✅ 已接受 |
 | 2026-10 | CSMAR 批量因子仅写长表（ADR-0009） | ✅ 已接受 |
 | 2026-10 | 缓存失效与单例生命周期（ADR-0010） | ✅ 已接受 |
+| 2026-10 | IC 查询路径修复 + 生产库 E2E 验收（ADR-0011） | ✅ 已接受 |
 
 ---
 

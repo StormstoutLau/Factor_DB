@@ -109,7 +109,7 @@ adj_factor DOUBLE, turnover DOUBLE
 PRIMARY KEY (trade_date, stock_code, loaded_at)
 ```
 
-**`factor_data`** — 因子 EAV 长表（当前 16.8 亿行）
+**`factor_data`** — 动态视图（`UNPIVOT factor_wide`，向后兼容，非实体表）
 ```
 trade_date DATE, stock_code VARCHAR, factor_name VARCHAR,
 factor_value DOUBLE, loaded_at TIMESTAMP
@@ -169,6 +169,9 @@ level1_parquet/trade_date=YYYY-MM-DD/data.parquet
 | `as_of=None` + 因子不在宽表（CSMAR 批量因子） | `factor_history` + PIT 子查询（ADR-0006） |
 | 回退 | `factor_data` + PIT 子查询 |
 
+### IC 计算路径（ADR-0011）
+`FactorQuery.get_ic_series` 强制读 `factor_history`（EAV，按 `factor_name` 物理排序），**禁止走 `factor_data` 视图**（241 列 UNPIVOT 展开 + 窗口函数会物化巨量中间结果，生产库实测 OOM）。前瞻收益用 `LEAD(close, days) OVER (PARTITION BY stock_code ORDER BY trade_date)`，禁用自连接 + `MIN(trade_date)` 相关子查询（实测 36.69 s 后 OOM）。IC 依赖 `daily_prices` 覆盖（生产起于 2020-01-02），更早区间无法计算。
+
 ---
 
 ## 五、数据流
@@ -203,7 +206,8 @@ BaseLoader.write_factor_long() 单事务双写
 3. 导入顺序：Phase 1 → 2 → 3 → 4
 4. 索引创建用 `safe_only=True` 跳过 OOM 风险索引
 5. 宽→长转换用 DuckDB `UNPIVOT`，禁用 pandas `melt()`
-6. 内存约束 32GB，ART 索引对 >800M 行表会 OOM
+6. IC 计算只读 `factor_history`，前瞻收益用 `LEAD`（ADR-0011）
+7. 内存约束 32GB，ART 索引对 >800M 行表会 OOM
 
 ---
 

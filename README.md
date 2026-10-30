@@ -64,7 +64,7 @@ Factor_DB/
 │   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
 │   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
 │   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
-├── tests/                       # Test Suite (305 tests, all passing)
+├── tests/                       # Test Suite (310 tests, all passing)
 ├── benchmarks/                  # Performance Benchmarks
 ├── docs/                        # Documentation
 └── cli.py                       # CLI Entry Point
@@ -332,23 +332,25 @@ DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions 
 python -m pytest tests/ -v
 ```
 
-**305 tests, all passing.** Coverage includes:
+**310 tests, all passing.** Coverage includes:
 
 | Test Suite | Tests | What's Covered |
 |-----------|-------|----------------|
 | `test_connection.py` | — | Connection pool (singleton, read/write split, thread-safe) |
 | `test_schema.py` | — | Schema management (tables, indexes, wide table creation) |
-| `test_wide_loader.py` | 9 | Wide table loading (Upsert, dual-write, NaN handling) |
-| `test_wide_query.py` | 10 | Wide table queries (cross-section, matrix, PIT fallback) |
-| `test_migration.py` | 6 | Data migration (factor_data → factor_wide + factor_history) |
+| `test_wide_loader.py` | 12 | Wide table loading (Upsert, dual-write, NaN handling) |
+| `test_wide_query.py` | 12 | Wide table queries (cross-section, matrix, PIT fallback, IC path) |
+| `test_migration.py` | 11 | Data migration (factor_data → factor_wide + factor_history) |
 | `test_level1_parquet.py` | 12 | Feather→Parquet conversion, partition pruning, PriceQuery adapter |
 | `test_pit_null_filter.py` | 5 | PIT NULL filtering (root cause fix for all-NaN price matrix) |
-| `test_query.py` | — | Price/factor queries, stock screening |
-| `test_daily_loader.py` | — | Daily data loading |
-| `test_adapters.py` | — | pandas adapter, engine compatibility |
-| `test_extension.py` | — | Macro/news/alternative data loading & query |
-| `test_osint.py` | — | OSINT collectors & pipeline |
-| `test_cache.py` | — | Query cache (LRU) |
+| `test_query.py` | 9 | Price/factor queries, stock screening |
+| `test_daily_loader.py` | 26 | Daily data loading |
+| `test_adapters.py` | 8 | pandas adapter, engine compatibility |
+| `test_extension.py` | 21 | Macro/news/alternative data loading & query |
+| `test_osint.py` | 54 | OSINT collectors & pipeline |
+| `test_cache.py` | 14 | Query cache (LRU + write invalidation) |
+| `test_packaging.py` | 3 | LICENSE, entry point and packaging metadata |
+| `test_validate_production.py` | 4 | Production E2E validation script (S1–S5, report rendering) |
 
 ## Documentation
 

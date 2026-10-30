@@ -16,6 +16,7 @@
 | [0008](0008-migration-safety.md) | 双轨迁移安全机制（事务 + RENAME 备份 + 对账） | 已接受（修订 0004 执行方式） | 2026-10 |
 | [0009](0009-csmar-history-only.md) | CSMAR 批量因子仅写入长表 | 已接受 | 2026-10 |
 | [0010](0010-cache-invalidation-singleton-lifecycle.md) | 查询缓存写后失效与连接单例生命周期 | 已接受 | 2026-10 |
+| [0011](0011-ic-query-path-fix.md) | IC 计算路径修复（数据源与前瞻收益实现） | 已接受 | 2026-10 |
 
 ## 决策记录格式
 

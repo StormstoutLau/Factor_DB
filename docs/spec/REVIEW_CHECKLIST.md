@@ -42,21 +42,21 @@
 
 ---
 
-## 二、当前文档体系验收（本次任务）
+## 二、当前文档体系验收（2026-10 复核）
 
 ### 文档完整性
 - [x] 开发流程规范 `docs/spec/DEVELOPMENT_PROCESS.md`
 - [x] 审查验收 checklist `docs/spec/REVIEW_CHECKLIST.md`（本文件）
-- [x] ADR 索引 `docs/adr/README.md` + 7 个决策记录
+- [x] ADR 索引 `docs/adr/README.md` + 11 个决策记录（0001~0011）
 - [x] 架构文档 `docs/ARCHITECTURE.md`（已更新为真实状态）
 - [x] 开发日志 `docs/DEVLOG.md`
 
 ### 文档一致性对齐（本次已核对）
 - [x] 因子数：241（ARCHITECTURE / DEVLOG / ADR-0007 一致）
-- [x] 数据行数：1,683,530,224（ARCHITECTURE / DEVLOG 一致）
-- [x] DB 大小：46.39 GB（ARCHITECTURE 实测值）
-- [x] 双轨状态：代码完成、未迁移（ADR-0004 / ARCHITECTURE / DEVLOG 一致）
-- [x] 决策编号：ADR-0001~0007 连续，索引与实际文件一致
+- [x] 数据行数：`factor_history` 5,203,062,078 / `factor_wide` 9,307,121（ARCHITECTURE / DEVLOG 一致）
+- [x] DB 大小：46.19 GB（ARCHITECTURE 实测值，NVMe 压缩后）
+- [x] 双轨状态：已迁移（2026-10-23，`factor_data` 为动态视图）
+- [x] 决策编号：ADR-0001~0011 连续，索引与实际文件一致
 
 ---
 
@@ -64,8 +64,8 @@
 
 | 优先级 | 问题 | 关联文档 |
 |--------|------|---------|
-| P0 | `factor_data` 主键缺失（>26GB 内存） | ADR-0004, ARCHITECTURE §7 |
-| P0 | 双轨迁移未执行 | ADR-0004, ARCHITECTURE §3.2 |
+| ~~P0~~ | ~~`factor_data` 主键缺失（>26GB 内存）~~ → 2026-10-23 双轨迁移完成 | ADR-0004, ARCHITECTURE §7 |
+| ~~P0~~ | ~~双轨迁移未执行~~ → 2026-10-23 完成（`factor_data` 为动态视图） | ADR-0004, ARCHITECTURE §3.2 |
 | ~~P2~~ | ~~Level 1 历史导入未完成~~ → 2026-10-23 完成（2,250 分区） | ADR-0005, ARCHITECTURE §7 |
 | ~~P2~~ | ~~CSMAR 因子导入~~ → 2026-10-24 完成（5,439 因子） | ADR-0009 |
 
@@ -280,4 +280,36 @@
 - [x] `pyproject` 脚本目标 `Factor_DB.cli:main` 可导入且可调用
 - [x] README（中/英）声明的 MIT 与 `LICENSE` / `pyproject` 一致
 - [x] ARCHITECTURE / README 中缓存表述与实现一致（LRU + 写后失效）
+
+---
+
+## 十二、生产库端到端验收 + IC 查询路径修复（2026-10-30）
+
+来源：[调研](../research/prod_e2e_validation_research.md) / [设计](../design/prod_e2e_validation_design.md) / [实施](../implementation/prod_e2e_validation_implementation.md) / [ADR-0011](../adr/0011-ic-query-path-fix.md) · 报告：[Markdown](../reports/prod_e2e_validation_2026-10-30.md) / [JSON](../reports/prod_e2e_validation_2026-10-30.json)
+
+### 缺陷与修复
+- [x] 缺陷复现：`get_ic_series` 走 `factor_data`（241 列 UNPIVOT 视图）→ 生产库 OOM
+- [x] 二次复现：改读 `factor_history` 后仍 OOM，隔离定位 `return_rank` 自连接 + `MIN(trade_date)` 相关子查询（36.69 s 后 Allocation failure）
+- [x] 修复：数据源固定 `factor_history`；前瞻收益改 `LEAD(close, days) OVER (PARTITION BY stock_code ORDER BY trade_date)`；`forward_return_days` 生效
+- [x] 红测试先行：`test_ic_series_reads_history_not_view`（红灯 `CatalogException: factor_data does not exist`）
+- [x] 定向回归：`test_wide_query.py` 12 passed；`test_wide_query + test_pit + test_query` 31 passed
+
+### 验收脚本
+- [x] `scripts/validate_production.py`：只读连接、S1–S5、硬性/软性判定分离、JSON + Markdown 报告、退出码 0/1/2
+- [x] 抽样目标从库内探测（宽表因子按窗口非空覆盖、history 因子来自 `factor_info`、股票来自 `daily_prices`），不写死名称
+- [x] `tests/test_validate_production.py` 4 passed（正常 / 缺表 / 报告渲染 / IC 区间越界降级）
+- [x] 全量回归 `pytest` 通过（**310 passed**）
+
+### 生产实跑（2026-10-30，窗口 2024-01-01 ~ 2024-03-31）
+- [x] `E2E_VALIDATION=OK`，5 pass / 0 warn / 0 fail，总耗时 2.44 s
+- [x] S1 0.11 s：18 个对象；`factor_data`=VIEW；wide 9,307,121 / history 5,203,062,078 / daily 43,226,352
+- [x] S2 0.34 s：8 因子 × 373,029 行，非空率 67.1%
+- [x] S3 1.29 s：`STK_MKT_DGTWBREAKPOINTS_MomMax` 250 行；PIT `LT_debt_ratio` 323,445 行与最新版一致
+- [x] S4 0.54 s：`get_daily` 464 行；`get_price_matrix` 58 × 2
+- [x] S5 0.17 s：`LT_debt_ratio` 57 期，IC 均值 0.017640，max|IC| 0.224
+
+### 文档同步
+- [x] ARCHITECTURE §4 增补 IC 路径约束（禁止 `factor_data` 视图、禁止自连接、`daily_prices` 覆盖限制）
+- [x] DEVLOG / ADR-0011 / ADR 索引 / 本 checklist 同步
+- [x] 文档一致性：ADR 编号 0001~0011；ADR 计数 11
 

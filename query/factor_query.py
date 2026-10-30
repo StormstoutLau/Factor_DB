@@ -400,19 +400,22 @@ class FactorQuery(BaseQuery):
         filter = QueryFilter(start_date=start_date, end_date=end_date)
         params: dict[str, Any] = {}
         date_filter = self._build_date_filter(filter, params)
-        # 自连接 daily_prices 的上下文需要限定别名，避免 trade_date 歧义
-        joined_conditions = []
-        if start_date:
-            joined_conditions.append(f"a.trade_date >= {bind(params, 'start_date', start_date)}")
-        if end_date:
-            joined_conditions.append(f"a.trade_date <= {bind(params, 'end_date', end_date)}")
-        joined_date_filter = ' AND '.join(joined_conditions) if joined_conditions else '1=1'
+        days = max(1, int(forward_return_days))
 
         factor_value_param = bind(params, 'factor_name', factor_name)
-        factor_table = self._fallback_table([factor_name], None)
+        # IC 需要 EAV 布局：factor_history 覆盖全部因子且按 factor_name 物理排序；
+        # factor_data 是 241 列 UNPIVOT 视图，IC 的窗口函数会物化巨量中间结果
+        # （生产库实测直接 OOM）。仅当 history 不存在时才回退视图。
+        factor_table = self._history_table or 'factor_data'
         factor_pit_filter = self._build_pit_subquery(
             factor_table, ['trade_date', 'stock_code', 'factor_name'],
             extra_conditions=f"factor_name = {factor_value_param} AND {date_filter}",
+            params=params
+        )
+        price_pit_filter = self._build_pit_subquery(
+            'daily_prices', ['trade_date', 'stock_code'],
+            extra_conditions=date_filter,
+            non_null_columns=['close'],
             params=params
         )
 
@@ -426,27 +429,27 @@ class FactorQuery(BaseQuery):
                 FROM {quote_identifier(factor_table)}
                 WHERE factor_name = {factor_value_param} AND {date_filter} AND {factor_pit_filter}
             ),
+            px AS (
+                SELECT
+                    trade_date,
+                    stock_code,
+                    close,
+                    LEAD(close, {days}) OVER (
+                        PARTITION BY stock_code ORDER BY trade_date
+                    ) as future_close
+                FROM daily_prices
+                WHERE {date_filter} AND {price_pit_filter}
+            ),
             return_rank AS (
                 SELECT
-                    a.trade_date,
-                    a.stock_code,
-                    RANK() OVER (PARTITION BY a.trade_date ORDER BY (b.close - a.close) / a.close) as return_rank
-                FROM daily_prices a
-                JOIN daily_prices b
-                    ON a.stock_code = b.stock_code
-                    AND b.trade_date = (SELECT MIN(trade_date) FROM daily_prices WHERE trade_date > a.trade_date)
-                WHERE {joined_date_filter}
-                  AND (a.trade_date, a.stock_code, a.loaded_at) IN (
-                      SELECT trade_date, stock_code, MAX(loaded_at)
-                      FROM daily_prices
-                      WHERE {date_filter}
-                      GROUP BY trade_date, stock_code
-                  )
-                  AND (b.trade_date, b.stock_code, b.loaded_at) IN (
-                      SELECT trade_date, stock_code, MAX(loaded_at)
-                      FROM daily_prices
-                      GROUP BY trade_date, stock_code
-                  )
+                    trade_date,
+                    stock_code,
+                    RANK() OVER (
+                        PARTITION BY trade_date
+                        ORDER BY (future_close - close) / close
+                    ) as return_rank
+                FROM px
+                WHERE future_close IS NOT NULL
             )
             SELECT
                 f.trade_date,

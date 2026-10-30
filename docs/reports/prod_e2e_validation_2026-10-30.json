@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "db_path": "F:\\Coding\\Factor_DB\\factor_db.duckdb",
+    "real_path": "D:\\Factor_DB\\factor_db_compacted.duckdb",
+    "db_size_gb": 46.19,
+    "generated_at": "2026-10-30T22:34:16",
+    "python": "3.12.10",
+    "duckdb": "1.5.3",
+    "window": {
+      "start": "2024-01-01",
+      "end": "2024-03-31"
+    },
+    "memory_limit": "8GB"
+  },
+  "checks": [
+    {
+      "id": "S1",
+      "name": "结构与行数",
+      "status": "pass",
+      "elapsed_s": 0.107,
+      "detail": "18 个对象，行数 {'factor_wide': 9307121, 'factor_history': 5203062078, 'daily_prices': 43226352}",
+      "metrics": {
+        "factor_wide": 9307121,
+        "factor_history": 5203062078,
+        "daily_prices": 43226352
+      }
+    },
+    {
+      "id": "S2",
+      "name": "宽表矩阵",
+      "status": "pass",
+      "elapsed_s": 0.338,
+      "detail": "8 因子 × 373029 行，非空率 67.1%",
+      "metrics": {
+        "factors": [
+          "LT_debt_ratio",
+          "UTR_turnover",
+          "UTR_turnover_new",
+          "accounts_pay",
+          "accounts_receiv",
+          "accounts_receiv_bill",
+          "acct_payable",
+          "admin_exp"
+        ],
+        "rows": 373029,
+        "non_null_ratio": 0.6714
+      }
+    },
+    {
+      "id": "S3",
+      "name": "history + PIT",
+      "status": "pass",
+      "elapsed_s": 1.292,
+      "detail": "STK_MKT_DGTWBREAKPOINTS_MomMax 250 行；PIT 323445 行一致",
+      "metrics": {
+        "history_factor": "STK_MKT_DGTWBREAKPOINTS_MomMax",
+        "history_rows": 250,
+        "wide_factor": "LT_debt_ratio",
+        "pit_rows": 323445
+      }
+    },
+    {
+      "id": "S4",
+      "name": "价格查询",
+      "status": "pass",
+      "elapsed_s": 0.54,
+      "detail": "get_daily 464 行；get_price_matrix (58, 2)",
+      "metrics": {
+        "stocks": [
+          "000001",
+          "000002",
+          "000004",
+          "000006",
+          "000007",
+          "000008",
+          "000009",
+          "000010"
+        ],
+        "daily_rows": 464,
+        "matrix_shape": [
+          58,
+          2
+        ]
+      }
+    },
+    {
+      "id": "S5",
+      "name": "IC 序列",
+      "status": "pass",
+      "elapsed_s": 0.165,
+      "detail": "LT_debt_ratio 57 期，IC 均值 0.017640",
+      "metrics": {
+        "factor": "LT_debt_ratio",
+        "periods": 57,
+        "ic_mean": 0.01764,
+        "ic_abs_max": 0.223971,
+        "window": [
+          "2024-01-01",
+          "2024-03-31"
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "pass": 5,
+    "warn": 0,
+    "fail": 0,
+    "total_elapsed_s": 2.442
+  }
+}

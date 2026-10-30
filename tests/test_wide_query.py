@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from Factor_DB.core.connection import DuckDBConnection
+from Factor_DB.core.schema import SchemaManager
 from loaders.daily_loader import DailyLoader
 from loaders.base import LoaderConfig
 from query.factor_query import FactorQuery
@@ -201,6 +202,40 @@ class TestWideFactorQuery(unittest.TestCase):
 
         section = query.get_cross_section('FF_MktRF', trade_date=date(2020, 1, 31))
         self.assertEqual(len(section), 2)
+
+
+    def test_ic_series_reads_history_not_view(self):
+        """IC 计算应读 factor_history（EAV），不得走 factor_data 视图
+
+        factor_data 是 241 列 UNPIVOT 视图，IC 的窗口函数会物化巨量中间结果，
+        生产库实测直接 OOM。
+        """
+        conn = DuckDBConnection(self.config.db_path)
+        schema = SchemaManager(conn)
+        schema.create_table('daily_prices')
+        with conn as c:
+            c.execute("""
+                INSERT INTO daily_prices
+                    (trade_date, stock_code, close, loaded_at)
+                VALUES
+                    (DATE '2024-01-01', '000001', 10.0, TIMESTAMP '2024-01-01 00:00:00'),
+                    (DATE '2024-01-01', '000002', 20.0, TIMESTAMP '2024-01-01 00:00:00'),
+                    (DATE '2024-01-01', '600001', 30.0, TIMESTAMP '2024-01-01 00:00:00'),
+                    (DATE '2024-01-01', '600002', 40.0, TIMESTAMP '2024-01-01 00:00:00'),
+                    (DATE '2024-01-02', '000001', 11.0, TIMESTAMP '2024-01-02 00:00:00'),
+                    (DATE '2024-01-02', '000002', 20.0, TIMESTAMP '2024-01-02 00:00:00'),
+                    (DATE '2024-01-02', '600001', 33.0, TIMESTAMP '2024-01-02 00:00:00'),
+                    (DATE '2024-01-02', '600002', 36.0, TIMESTAMP '2024-01-02 00:00:00')
+            """)
+        conn.close()
+        DuckDBConnection._instances.clear()
+
+        query = FactorQuery(self.config.db_path)
+        df = query.get_ic_series('pe', 1, date(2024, 1, 1), date(2024, 1, 4))
+
+        self.assertFalse(df.empty)
+        self.assertIn('ic', df.columns)
+        self.assertFalse(df['ic'].isna().any())
 
 
 if __name__ == '__main__':
