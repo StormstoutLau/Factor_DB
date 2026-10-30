@@ -11,6 +11,9 @@ Usage:
     factor-db list-factors --db market.db
     factor-db cache-clear --db market.db
     factor-db compact --db market.db --before 2024-01-01
+    factor-db ic --db market.db --factor PE --days 5
+    factor-db ic-decay --db market.db --factor PE --days 1,2,3,5,10,20
+    factor-db validate --db market.db --start 2024-01-01 --end 2024-03-31
 """
 
 from __future__ import annotations
@@ -149,6 +152,53 @@ def cmd_ic_decay(args):
     query.conn.close()
 
 
+def cmd_ic(args):
+    """计算单期 IC 时间序列"""
+    from Factor_DB.query.factor_query import FactorQuery
+
+    query = FactorQuery(args.db)
+    df = query.get_ic_series(
+        args.factor, args.days, start_date=args.start, end_date=args.end
+    )
+    if df.empty:
+        print(f'无 IC 数据: {args.factor}')
+    else:
+        ic = df['ic']
+        ic_std = float(ic.std(ddof=1)) if len(ic) > 1 else float('nan')
+        ic_mean = float(ic.mean())
+        ic_ir = ic_mean / ic_std if ic_std else float('nan')
+        print(
+            f'IC 序列: {args.factor}, forward_return_days={args.days}, {len(df)} 期'
+        )
+        print(
+            f'ic_mean={ic_mean:.6f}  ic_std={ic_std:.6f}  '
+            f'ic_ir={ic_ir:.6f}  max|ic|={float(ic.abs().max()):.6f}'
+        )
+        rows = df if args.limit <= 0 else df.head(args.limit)
+        print(rows.to_string(index=False))
+    query.conn.close()
+
+
+def cmd_validate(args):
+    """生产库端到端验收（只读），委托 scripts/validate_production.py"""
+    from Factor_DB.scripts import validate_production
+
+    argv: list[str] = []
+    if args.db:
+        argv += ['--db', args.db]
+    if args.start:
+        argv += ['--start', args.start]
+    if args.end:
+        argv += ['--end', args.end]
+    if args.memory_limit:
+        argv += ['--memory-limit', args.memory_limit]
+    if args.report_dir:
+        argv += ['--report-dir', args.report_dir]
+    if args.no_report:
+        argv.append('--no-report')
+    return validate_production.main(argv)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Factor_DB - 量化金融数据管理系统',
@@ -192,6 +242,15 @@ def main(argv=None):
     p_icd.add_argument('--start', type=_parse_date, help='开始日期 YYYY-MM-DD')
     p_icd.add_argument('--end', type=_parse_date, help='结束日期 YYYY-MM-DD')
 
+    # ic
+    p_ic = subparsers.add_parser('ic', help='计算单期 IC 时间序列')
+    p_ic.add_argument('--db', default='factor_db.duckdb', help='数据库路径')
+    p_ic.add_argument('--factor', required=True, help='因子名称')
+    p_ic.add_argument('--days', type=int, default=1, help='前向收益天数')
+    p_ic.add_argument('--start', type=_parse_date, help='开始日期 YYYY-MM-DD')
+    p_ic.add_argument('--end', type=_parse_date, help='结束日期 YYYY-MM-DD')
+    p_ic.add_argument('--limit', type=int, default=10, help='展示行数，<=0 表示全部')
+
     # compact
     p_compact = subparsers.add_parser('compact', help='清理旧版本数据')
     p_compact.add_argument('--db', default='factor_db.duckdb', help='数据库路径')
@@ -199,6 +258,15 @@ def main(argv=None):
         '--before', required=True,
         help='截止日期 (YYYY-MM-DD)，保留此日期之前每个主键的最新版本'
     )
+
+    # validate
+    p_validate = subparsers.add_parser('validate', help='生产库端到端验收（只读）')
+    p_validate.add_argument('--db', help='数据库路径（默认与脚本一致）')
+    p_validate.add_argument('--start', help='开始日期 YYYY-MM-DD')
+    p_validate.add_argument('--end', help='结束日期 YYYY-MM-DD')
+    p_validate.add_argument('--memory-limit', help='DuckDB memory_limit，如 8GB')
+    p_validate.add_argument('--report-dir', help='报告输出目录')
+    p_validate.add_argument('--no-report', action='store_true', help='只打印摘要，不写报告')
 
     args = parser.parse_args(argv)
 
@@ -215,10 +283,13 @@ def main(argv=None):
         'cache-clear': cmd_cache_clear,
         'compact': cmd_compact,
         'ic-decay': cmd_ic_decay,
+        'ic': cmd_ic,
+        'validate': cmd_validate,
     }
 
-    handlers[args.command](args)
+    code = handlers[args.command](args)
+    return code if isinstance(code, int) else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

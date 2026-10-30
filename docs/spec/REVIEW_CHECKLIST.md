@@ -340,3 +340,27 @@
 - [x] 全量 `pytest`：**319 passed**；`ruff check .` All checks passed
 - [x] DEVLOG 新增条目；ARCHITECTURE IC 章节补 `get_ic_decay` 口径；README / README_zh 测试数 310 → 319 并补两行测试表
 
+## 十四、CLI 收口：`ic` / `validate`（2026-10-30）
+
+来源：[调研](../research/cli_surface_research.md) / [设计](../design/cli_surface_design.md) / [实施](../implementation/cli_surface_implementation.md)
+
+### 接口
+- [x] `factor-db ic --factor NAME [--days N] [--start/--end] [--limit N] [--db PATH]`：复用 `get_ic_series`，输出期数 + `ic_mean/ic_std(ddof=1)/ic_ir/max|ic|` + 前 N 行
+- [x] `factor-db validate [--db/--start/--end/--memory-limit/--report-dir/--no-report]`：argv 原样转发 `scripts.validate_production.main`，不复制 S1–S5 逻辑
+- [x] `main()` 返回整数退出码，入口 `sys.exit(main())`；既有命令返回 `None` → 0
+- [x] 未新增 `scripts/__init__.py`：`from Factor_DB.scripts import validate_production` 经命名空间子包实测可用
+
+### TDD
+- [x] 红灯 3 failed：`invalid choice: 'ic'`（SystemExit 2）×2 + `validate` 缺失分发
+- [x] 绿灯：`tests/test_cli.py` + `tests/test_ic_decay.py` → 12 passed
+- [x] 新增用例：`test_cli_ic_prints_summary_and_honours_limit`、`test_cli_ic_reports_empty_result`、`test_validate_missing_db_returns_2`
+- [x] 全量：**322 passed**；`ruff check .` All checks passed
+
+### 生产实跑（只读）
+- [x] `ic --factor LT_debt_ratio --days 1 --start 2024-01-01 --end 2024-03-31 --limit 5` → 57 期，`ic_mean=0.017640`（与验收报告一致），EXIT 0
+- [x] `validate --no-report` → `E2E_VALIDATION=OK`，5 PASS（2.18 s），EXIT 0（退出码正确透传）
+
+### 文档同步
+- [x] DEVLOG 新增条目；ARCHITECTURE 目录树子命令数 7 → 10、测试数 305 → 322
+- [x] README / README_zh 测试数 319 → 322；README 测试表 `test_cli` 5→6、`test_ic_decay` 4→6
+

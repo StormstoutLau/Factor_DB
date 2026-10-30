@@ -129,6 +129,31 @@ class TestICDecay(unittest.TestCase):
         self.assertIn('forward_return_days', output)
         self.assertIn('ic_mean', output)
 
+    def test_cli_ic_prints_summary_and_honours_limit(self):
+        """CLI ic 输出统计摘要，--limit 限制展示行数"""
+        out = StringIO()
+        with redirect_stdout(out):
+            main([
+                'ic', '--db', self.db_path, '--factor', 'pe', '--days', '1',
+                '--start', '2024-01-01', '--end', '2024-01-06', '--limit', '2',
+            ])
+        output = out.getvalue()
+        self.assertIn('IC 序列', output)
+        self.assertIn('ic_mean=', output)
+        self.assertIn('2024-01-01', output)
+        self.assertIn('2024-01-02', output)
+        self.assertNotIn('2024-01-06', output)
+
+    def test_cli_ic_reports_empty_result(self):
+        """CLI ic 在无数据时输出提示而不抛异常"""
+        out = StringIO()
+        with redirect_stdout(out):
+            main([
+                'ic', '--db', self.db_path, '--factor', 'not_a_factor',
+                '--start', '2024-01-01', '--end', '2024-01-06',
+            ])
+        self.assertIn('无 IC 数据', out.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

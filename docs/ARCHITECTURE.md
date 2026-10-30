@@ -73,9 +73,9 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（305 测试）
+├── tests/                   # 测试套件（322 测试）
 ├── benchmarks/              # 基准测试
-├── cli.py                   # CLI（7 子命令）
+├── cli.py                   # CLI（10 子命令，含 ic / ic-decay / validate）
 └── docs/                    # 文档（含 spec/adr）
 ```
 

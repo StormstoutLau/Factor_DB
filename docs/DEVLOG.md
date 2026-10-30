@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### CLI 收口：`ic` / `validate` 子命令（2026-10-30）
+- **背景**: `get_ic_series` 与 `scripts/validate_production.py` 均已存在并生产验证，但只能通过 Python 片段或直接执行脚本调用，与其余命令的 `--db` 约定不一致（[调研](research/cli_surface_research.md)）
+- **`ic`**: `factor-db ic --factor X [--days N] [--start/--end] [--limit N]`，输出期数 + `ic_mean/ic_std(ddof=1)/ic_ir/max|ic|` 与前 N 行；空结果打印 `无 IC 数据`；复用只读 `FactorQuery`
+- **`validate`**: `factor-db validate [--db/--start/--end/--memory-limit/--report-dir/--no-report]`，argv 原样转发 `validate_production.main`，退出码 0/1/2 透传给 shell/CI
+- **`main()`**: 返回整数退出码（`console_scripts` 语义），既有命令返回 `None` → 0；入口改 `sys.exit(main())`
+- **TDD**: 红灯 3 failed（`invalid choice: 'ic'` / `SystemExit: 2`）→ 绿灯定向 12 passed
+- **生产实跑（只读）**: `ic` 输出 `LT_debt_ratio` 57 期、`ic_mean=0.017640`（与验收报告一致）；`validate --no-report` → `E2E_VALIDATION=OK`，5 PASS，EXIT 0
+- **测试**: 全量 **322 passed**，`ruff` 零告警
+- **文档**: [设计](design/cli_surface_design.md) / [实施](implementation/cli_surface_implementation.md)；ARCHITECTURE 目录树与测试数同步
+
 ### 工程化基线 + IC 衰减分析 + 根目录清理（2026-10-30）
 - **CI**: 新增 [.github/workflows/ci.yml](../.github/workflows/ci.yml)（push/PR → `ruff check .` + `pytest`，Ubuntu / Python 3.12 / `pip install -e ".[dev]"`）
 - **静态检查**: `pyproject.toml` 新增 dev extras（pytest/ruff）与 ruff 保守规则集（`E4,E7,E9,F`）；`ruff --fix` 清理 67 项未使用导入/空 f-string，人工处理 6 个 F841（DuckDB `FROM df` 引用，加 `# noqa`）

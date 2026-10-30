@@ -8,7 +8,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 from Factor_DB.cli import main
 from Factor_DB.core.connection import DuckDBConnection
@@ -79,6 +79,14 @@ class TestCli(unittest.TestCase):
         """cache-clear 输出提示"""
         output = self._run(['cache-clear'])
         self.assertIn('缓存', output)
+
+    def test_validate_missing_db_returns_2(self):
+        """validate 在数据库缺失时返回环境错误码 2"""
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = main(['validate', '--db', os.path.join(self.temp_dir, 'missing.duckdb')])
+        self.assertEqual(code, 2)
+        self.assertIn('环境错误', err.getvalue())
 
 
 if __name__ == '__main__':
