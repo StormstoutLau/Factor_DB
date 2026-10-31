@@ -364,3 +364,31 @@
 - [x] DEVLOG 新增条目；ARCHITECTURE 目录树子命令数 7 → 10、测试数 305 → 322
 - [x] README / README_zh 测试数 319 → 322；README 测试表 `test_cli` 5→6、`test_ic_decay` 4→6
 
+## 十五、分位数组合分层收益（2026-10-31）
+
+来源：[调研](../research/quantile_portfolio_research.md) / [设计](../design/quantile_portfolio_design.md) / [实施](../implementation/quantile_portfolio_implementation.md)
+
+### 增量判定（与 factor_pipeline 边界）
+- [x] 核查 `F:\Coding\factor_pipeline\backtest\factor_metrics.py`：`compute_turnover` / `compute_long_short_returns` / `compute_spread` 已实现且有测试 → **不重复实现**
+- [x] 确认 N 分位逐组收益 + 单调性**未实现**（`three_channel_decomposition` 仅 top20%-bottom20% 单点）→ 唯一增量
+- [x] 确认 `factor_pipeline` 已硬依赖 `factor-db`，且 `FactorBacktestEngine` 需外部 `factor-trading-v3` → Factor_DB 不反向 import，测试不引入该包（避免依赖环与 CI 额外依赖）
+
+### 接口与 CLI
+- [x] `FactorQuery.get_quantile_portfolio(factor, n_groups=5, forward_return_days=1, start, end)`：`NTILE` 分组（1 = 因子值最低组）、`LEAD(close)` 前向收益、组内等权
+- [x] 返回 `trade_date/quantile/avg_return/n_stocks`；`df.attrs['monotonicity']` = 组均收益与组序的 Spearman
+- [x] `n_groups < 2` 抛 `ValueError`；空结果保留列并返回空表
+- [x] `factor-db quantile --factor NAME [--groups 5] [--days 1] [--start/--end]`，按组汇总 `avg_return/avg_n_stocks/periods`
+
+### TDD 与回归
+- [x] 红灯 5 failed（`AttributeError` ×4 + argparse `SystemExit: 2`）→ 绿灯 5 passed
+- [x] 用例：分组与收益方向、单调性 = 1.0、与 pandas 独立复算一致、非法组数抛错、CLI 输出
+- [x] 全量：**327 passed**；`ruff check .` All checks passed
+
+### 生产实跑（只读）
+- [x] `LT_debt_ratio` 2024Q1 / 5 组 / 1 日：组均收益 `-0.002095 → -0.001264` 严格单调，`monotonicity=1.000000`，57 期，组内 1020–1048 只
+- [x] 方向与 `ic_mean=0.017640` 一致
+
+### 文档同步
+- [x] DEVLOG 新增条目；ARCHITECTURE IC 章节补 `get_quantile_portfolio` 口径与 factor_pipeline 边界，子命令数 10 → 11、测试数 322 → 327
+- [x] README / README_zh 测试数 322 → 327；README 测试表新增 `test_quantile_portfolio.py`(5)
+

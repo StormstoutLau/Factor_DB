@@ -13,6 +13,7 @@ Usage:
     factor-db compact --db market.db --before 2024-01-01
     factor-db ic --db market.db --factor PE --days 5
     factor-db ic-decay --db market.db --factor PE --days 1,2,3,5,10,20
+    factor-db quantile --db market.db --factor PE --groups 5 --days 1
     factor-db validate --db market.db --start 2024-01-01 --end 2024-03-31
 """
 
@@ -199,6 +200,37 @@ def cmd_validate(args):
     return validate_production.main(argv)
 
 
+def cmd_quantile(args):
+    """计算分位数组合分层收益"""
+    from Factor_DB.query.factor_query import FactorQuery
+
+    query = FactorQuery(args.db)
+    df = query.get_quantile_portfolio(
+        args.factor, args.groups, args.days,
+        start_date=args.start, end_date=args.end
+    )
+    if df.empty:
+        print(f'无分层数据: {args.factor}')
+    else:
+        summary = (
+            df.groupby('quantile')
+            .agg(
+                avg_return=('avg_return', 'mean'),
+                avg_n_stocks=('n_stocks', 'mean'),
+                periods=('trade_date', 'nunique'),
+            )
+            .reset_index()
+        )
+        periods = df['trade_date'].nunique()
+        print(
+            f'分层收益: {args.factor}, forward_return_days={args.days}, '
+            f'{args.groups} 组, {periods} 期'
+        )
+        print(f'monotonicity={df.attrs["monotonicity"]:.6f}')
+        print(summary.to_string(index=False))
+    query.conn.close()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Factor_DB - 量化金融数据管理系统',
@@ -259,6 +291,15 @@ def main(argv=None):
         help='截止日期 (YYYY-MM-DD)，保留此日期之前每个主键的最新版本'
     )
 
+    # quantile
+    p_quantile = subparsers.add_parser('quantile', help='计算分位数组合分层收益')
+    p_quantile.add_argument('--db', default='factor_db.duckdb', help='数据库路径')
+    p_quantile.add_argument('--factor', required=True, help='因子名称')
+    p_quantile.add_argument('--groups', type=int, default=5, help='分组数，>=2')
+    p_quantile.add_argument('--days', type=int, default=1, help='前向收益天数')
+    p_quantile.add_argument('--start', type=_parse_date, help='开始日期 YYYY-MM-DD')
+    p_quantile.add_argument('--end', type=_parse_date, help='结束日期 YYYY-MM-DD')
+
     # validate
     p_validate = subparsers.add_parser('validate', help='生产库端到端验收（只读）')
     p_validate.add_argument('--db', help='数据库路径（默认与脚本一致）')
@@ -284,6 +325,7 @@ def main(argv=None):
         'compact': cmd_compact,
         'ic-decay': cmd_ic_decay,
         'ic': cmd_ic,
+        'quantile': cmd_quantile,
         'validate': cmd_validate,
     }
 

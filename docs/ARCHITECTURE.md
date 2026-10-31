@@ -73,9 +73,9 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（322 测试）
+├── tests/                   # 测试套件（327 测试）
 ├── benchmarks/              # 基准测试
-├── cli.py                   # CLI（10 子命令，含 ic / ic-decay / validate）
+├── cli.py                   # CLI（11 子命令，含 ic / ic-decay / quantile / validate）
 └── docs/                    # 文档（含 spec/adr）
 ```
 
@@ -172,6 +172,7 @@ level1_parquet/trade_date=YYYY-MM-DD/data.parquet
 ### IC 计算路径（ADR-0011）
 `FactorQuery.get_ic_series` 强制读 `factor_history`（EAV，按 `factor_name` 物理排序），**禁止走 `factor_data` 视图**（241 列 UNPIVOT 展开 + 窗口函数会物化巨量中间结果，生产库实测 OOM）。前瞻收益用 `LEAD(close, days) OVER (PARTITION BY stock_code ORDER BY trade_date)`，禁用自连接 + `MIN(trade_date)` 相关子查询（实测 36.69 s 后 OOM）。IC 依赖 `daily_prices` 覆盖（生产起于 2020-01-02），更早区间无法计算。
 `get_ic_decay` 在同一窗口内逐 horizon 复用该路径，输出 `ic_mean/ic_std/ic_ir`（日频未年化）。
+`get_quantile_portfolio` 复用同一数据路径，按 `NTILE(n_groups) OVER (PARTITION BY trade_date ORDER BY factor_value)` 分组（1 = 因子值最低组），组内等权前向收益，`df.attrs['monotonicity']` 为组均收益与组序的 Spearman。换手率、多空权重与 Spread 归 `factor_pipeline.backtest.factor_metrics`（本仓库不实现，避免依赖环）。
 
 ---
 

@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### 分位数组合分层收益（2026-10-31）
+- **背景**: 排查「P2 因子评估扩展」是否重复造轮子。核查 `F:\Coding\factor_pipeline`：换手率 `compute_turnover`、多空 `compute_long_short_returns`、`compute_spread` 均已实现且有测试；**N 分位逐组收益 + 单调性未实现**（[调研](research/quantile_portfolio_research.md)）
+- **边界**: `factor_pipeline` 已将 `factor-db` 列为硬依赖，反向接入会成环；其 `FactorBacktestEngine` 还需外部 `factor-trading-v3`。故 Factor_DB 只做 SQL 口径的分层收益
+- **实现**: `FactorQuery.get_quantile_portfolio(factor, n_groups=5, forward_return_days=1, start, end)`，`NTILE` 分组 + `LEAD(close)` 前向收益，输出 `trade_date/quantile/avg_return/n_stocks`，`df.attrs['monotonicity']` 为组均收益与组序的 Spearman
+- **CLI**: `factor-db quantile --factor X [--groups 5] [--days 1]`
+- **TDD**: 红灯 5 failed（`AttributeError` ×4 + argparse `SystemExit: 2`）→ 绿灯定向 5 passed
+- **生产实跑（只读）**: `LT_debt_ratio` 2024Q1 → 5 组收益 `-0.002095 → -0.001264` 严格单调，`monotonicity=1.0`，57 期
+- **测试**: 全量 **327 passed**，`ruff` 零告警
+- **文档**: [设计](design/quantile_portfolio_design.md) / [实施](implementation/quantile_portfolio_implementation.md)；ARCHITECTURE 补口径与边界、子命令数 10→11、测试数 322→327
+
 ### CLI 收口：`ic` / `validate` 子命令（2026-10-30）
 - **背景**: `get_ic_series` 与 `scripts/validate_production.py` 均已存在并生产验证，但只能通过 Python 片段或直接执行脚本调用，与其余命令的 `--db` 约定不一致（[调研](research/cli_surface_research.md)）
 - **`ic`**: `factor-db ic --factor X [--days N] [--start/--end] [--limit N]`，输出期数 + `ic_mean/ic_std(ddof=1)/ic_ir/max|ic|` 与前 N 行；空结果打印 `无 IC 数据`；复用只读 `FactorQuery`

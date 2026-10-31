@@ -510,6 +510,107 @@ class FactorQuery(BaseQuery):
         logger.debug(f"IC 衰减计算完成: {factor_name}, horizons={horizons}")
         return decay
 
+    def get_quantile_portfolio(
+        self,
+        factor_name: str,
+        n_groups: int = 5,
+        forward_return_days: int = 1,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> pd.DataFrame:
+        """计算分位数组合分层收益
+
+        每个交易日按因子值升序分为 n_groups 组（1 = 因子值最低组），
+        计算组内等权前向收益。与 get_ic_series 共用数据路径与 PIT 口径。
+
+        Args:
+            factor_name: 因子名称
+            n_groups: 分组数，必须 >= 2
+            forward_return_days: 前瞻收益率天数
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            DataFrame(trade_date, quantile, avg_return, n_stocks)；
+            ``df.attrs['monotonicity']`` 为组序与组均收益的 Spearman 相关系数
+        """
+        n_groups = int(n_groups)
+        if n_groups < 2:
+            raise ValueError('n_groups 必须 >= 2')
+        days = max(1, int(forward_return_days))
+
+        columns = ['trade_date', 'quantile', 'avg_return', 'n_stocks']
+
+        filter = QueryFilter(start_date=start_date, end_date=end_date)
+        params: dict[str, Any] = {}
+        date_filter = self._build_date_filter(filter, params)
+
+        factor_value_param = bind(params, 'factor_name', factor_name)
+        factor_table = self._history_table or 'factor_data'
+        factor_pit_filter = self._build_pit_subquery(
+            factor_table, ['trade_date', 'stock_code', 'factor_name'],
+            extra_conditions=f"factor_name = {factor_value_param} AND {date_filter}",
+            params=params
+        )
+        price_pit_filter = self._build_pit_subquery(
+            'daily_prices', ['trade_date', 'stock_code'],
+            extra_conditions=date_filter,
+            non_null_columns=['close'],
+            params=params
+        )
+
+        sql = f'''
+            WITH grouped AS (
+                SELECT
+                    trade_date,
+                    stock_code,
+                    NTILE({n_groups}) OVER (
+                        PARTITION BY trade_date ORDER BY factor_value
+                    ) as quantile
+                FROM {quote_identifier(factor_table)}
+                WHERE factor_name = {factor_value_param} AND {date_filter} AND {factor_pit_filter}
+            ),
+            px AS (
+                SELECT
+                    trade_date,
+                    stock_code,
+                    close,
+                    LEAD(close, {days}) OVER (
+                        PARTITION BY stock_code ORDER BY trade_date
+                    ) as future_close
+                FROM daily_prices
+                WHERE {date_filter} AND {price_pit_filter}
+            )
+            SELECT
+                g.trade_date,
+                g.quantile,
+                AVG((p.future_close - p.close) / p.close) as avg_return,
+                COUNT(*) as n_stocks
+            FROM grouped g
+            JOIN px p
+                ON g.trade_date = p.trade_date
+                AND g.stock_code = p.stock_code
+            WHERE p.future_close IS NOT NULL
+            GROUP BY g.trade_date, g.quantile
+            ORDER BY g.trade_date, g.quantile
+        '''
+
+        df = self._execute_query(sql, params)
+        if df.empty:
+            df = pd.DataFrame(columns=columns)
+
+        monotonicity = float('nan')
+        if not df.empty:
+            group_mean = df.groupby('quantile')['avg_return'].mean()
+            if len(group_mean) > 1:
+                ranks = group_mean.index.to_series().rank()
+                values = group_mean.rank()
+                monotonicity = float(ranks.corr(values))
+
+        df.attrs['monotonicity'] = monotonicity
+        logger.debug(f"分层收益计算完成: {factor_name}, groups={n_groups}, {len(df)} 行")
+        return df
+
     def list_factors(self) -> list[str]:
         """列出所有可用因子
 
