@@ -7,6 +7,13 @@
 
 ## 2026-10（最近）
 
+### PEP 639 license 元数据迁移（2026-11-02）
+- **背景**: `license = {text = "MIT"}` 是 PEP 621 旧式表写法；setuptools ≥77 起按 PEP 639 要求 SPDX 表达式 + `license-files`，旧写法构建时告警且 wheel 元数据无 `License-Expression` / `License-File`
+- **变更**: `license = "MIT"`、`license-files = ["LICENSE"]`；`build-system.requires` 提升到 `setuptools>=77.0.0`（PEP 639 支持起点）
+- **验证**: 本地 `python -m build --no-isolation` 产出 wheel/sdist，元数据 `Metadata-Version: 2.4`、`License-Expression: MIT`、`License-File: LICENSE`，wheel 内含 `dist-info/licenses/LICENSE`
+- **TDD**: `tests/test_packaging.py` 先红（仍断言旧表写法）→ 改为断言 PEP 639 字段并新增 build-system 版本用例 → 4 passed
+- **测试**: 全量 **335 passed**，`ruff` 零告警
+
 ### 数据源接入 P3：`collect` 子命令与采集器可发现性（2026-11-01）
 - **背景**: OSINT 采集能力已存在（4 个 collector + `OSINTPipeline._store` 自动路由），但 CLI 无入口；实测 `auto_discover()` 在包模式下注册 **0 个**（`osint/registry.py` 硬编码 `package='osint'`）（[调研](research/data_source_ingestion_research.md)）
 - **另一处真实缺陷**: `AKShareMacroCollector.INDICATOR_MAP` 12 个映射中 **7 个函数在 AKShare 1.18.64 已不存在**（`macro_china_money_supply_monthly` / `interest_rate` / `fx_reserves` / `import_export` 等）

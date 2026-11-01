@@ -64,7 +64,7 @@ Factor_DB/
 │   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
 │   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
 │   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
-├── tests/                       # Test Suite (334 tests, all passing)
+├── tests/                       # Test Suite (335 tests, all passing)
 ├── benchmarks/                  # Performance Benchmarks
 ├── docs/                        # Documentation
 └── cli.py                       # CLI Entry Point
@@ -332,7 +332,7 @@ DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions 
 python -m pytest tests/ -v
 ```
 
-**334 tests, all passing.** Coverage includes:
+**335 tests, all passing.** Coverage includes:
 
 | Test Suite | Tests | What's Covered |
 |-----------|-------|----------------|
@@ -349,7 +349,7 @@ python -m pytest tests/ -v
 | `test_extension.py` | 21 | Macro/news/alternative data loading & query |
 | `test_osint.py` | 54 | OSINT collectors & pipeline |
 | `test_cache.py` | 14 | Query cache (LRU + write invalidation) |
-| `test_packaging.py` | 3 | LICENSE, entry point and packaging metadata |
+| `test_packaging.py` | 4 | LICENSE, entry point and packaging metadata |
 | `test_validate_production.py` | 4 | Production E2E validation script (S1–S5, report rendering) |
 | `test_cli.py` | 6 | CLI dispatch, read-only query/list-factors, validate exit code, help output |
 | `test_ic_decay.py` | 6 | IC decay curve across forward horizons, CLI `ic` / `ic-decay` |
