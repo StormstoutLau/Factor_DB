@@ -8,7 +8,7 @@ AKShare 宏观数据收集器
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -29,17 +29,28 @@ class AKShareMacroCollector(BaseCollector):
 
     INDICATOR_MAP = {
         'GDP_YEARLY': 'macro_china_gdp_yearly',
-        'GDP_QUARTERLY': 'macro_china_gdp_quarterly',
+        'GDP_QUARTERLY': 'macro_china_gdp',
         'CPI_YEARLY': 'macro_china_cpi_yearly',
         'CPI_MONTHLY': 'macro_china_cpi_monthly',
         'PPI_YEARLY': 'macro_china_ppi_yearly',
-        'PPI_MONTHLY': 'macro_china_ppi_monthly',
+        'PPI_MONTHLY': 'macro_china_ppi',
         'PMI_MANUFACTURING': 'macro_china_pmi',
-        'M2_YEARLY': 'macro_china_money_supply_yearly',
-        'M2_MONTHLY': 'macro_china_money_supply_monthly',
-        'INTEREST_RATE': 'macro_china_interest_rate',
-        'FX_RESERVES': 'macro_china_fx_reserves',
-        'IMPORT_EXPORT': 'macro_china_import_export',
+        'M2_YEARLY': 'macro_china_m2_yearly',
+        'M2_MONTHLY': 'macro_china_money_supply',
+        'INTEREST_RATE': 'macro_china_lpr',
+        'FX_RESERVES': 'macro_china_fx_gold',
+        'IMPORT_EXPORT': 'macro_china_hgjck',
+    }
+
+    # 主函数名 + 历史/备选名：AKShare 函数命名多次变更（本地 1.18.64 实测 12 个旧映射中 7 个失效）
+    FUNCTION_CANDIDATES = {
+        'GDP_QUARTERLY': ('macro_china_gdp', 'macro_china_gdp_quarterly'),
+        'PPI_MONTHLY': ('macro_china_ppi', 'macro_china_ppi_monthly'),
+        'M2_YEARLY': ('macro_china_m2_yearly', 'macro_china_money_supply_yearly'),
+        'M2_MONTHLY': ('macro_china_money_supply', 'macro_china_money_supply_monthly'),
+        'INTEREST_RATE': ('macro_china_lpr', 'macro_china_interest_rate'),
+        'FX_RESERVES': ('macro_china_fx_gold', 'macro_china_fx_reserves_yearly', 'macro_china_fx_reserves'),
+        'IMPORT_EXPORT': ('macro_china_hgjck', 'macro_china_import_export'),
     }
 
     def setup(self):
@@ -57,10 +68,30 @@ class AKShareMacroCollector(BaseCollector):
             indicator = 'GDP_YEARLY'
         return {'indicator': indicator, 'func_name': self.INDICATOR_MAP[indicator]}
 
+    def _resolve_function(self, indicator: str, primary: str) -> Optional[str]:
+        """按候选顺序解析可用的 AKShare 函数名"""
+        ak = getattr(self, '_ak', None)
+        if ak is None:
+            logger.error("AKShare 未初始化，无法解析函数: %s", primary)
+            return None
+
+        for name in self.FUNCTION_CANDIDATES.get(indicator, (primary,)):
+            if hasattr(ak, name):
+                if name != primary:
+                    logger.warning(f"指标 {indicator} 回退到候选函数: {name}")
+                return name
+
+        logger.error(f"指标 {indicator} 无可用 AKShare 函数: {primary}")
+        return None
+
     def extract_data(self, query: Dict[str, Any]) -> Any:
         if self._error_state:
             return None
-        func_name = query['func_name']
+        func_name = self._resolve_function(
+            query.get('indicator', ''), query['func_name']
+        )
+        if func_name is None:
+            return None
         func = getattr(self._ak, func_name, None)
         if func is None:
             logger.error(f"AKShare 函数不存在: {func_name}")

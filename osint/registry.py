@@ -130,6 +130,8 @@ class CollectorRegistry:
 
         count = 0
         package_dir = Path(package_path)
+        # 兼容包模式（Factor_DB.osint）与扁平模式（osint）两种导入风格
+        package = __package__ or 'osint'
 
         if not package_dir.exists():
             logger.warning(f"收集器目录不存在: {package_path}")
@@ -137,7 +139,7 @@ class CollectorRegistry:
 
         for module_info in pkgutil.iter_modules([str(package_dir)]):
             try:
-                module = importlib.import_module(f'.collectors.{module_info.name}', package='osint')
+                module = importlib.import_module(f'.collectors.{module_info.name}', package=package)
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
                     if (isinstance(attr, type)

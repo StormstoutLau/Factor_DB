@@ -14,6 +14,7 @@ Usage:
     factor-db ic --db market.db --factor PE --days 5
     factor-db ic-decay --db market.db --factor PE --days 1,2,3,5,10,20
     factor-db quantile --db market.db --factor PE --groups 5 --days 1
+    factor-db collect --db market.db --source akshare_macro --indicator CPI_MONTHLY
     factor-db validate --db market.db --start 2024-01-01 --end 2024-03-31
 """
 
@@ -231,6 +232,46 @@ def cmd_quantile(args):
     query.conn.close()
 
 
+def cmd_collect(args):
+    """运行 OSINT 采集器并写入数据库"""
+    from Factor_DB.osint.pipeline import OSINTPipeline
+
+    pipeline = OSINTPipeline(args.db)
+    try:
+        pipeline.auto_discover()
+        ids = pipeline.registry.get_registered_ids()
+
+        if args.list:
+            print(f'已注册采集器: {len(ids)}')
+            for item in pipeline.registry.list_collectors():
+                print(f"  {item['source_id']}  {item['summary']}")
+            return 0
+
+        if not args.source:
+            print('用法错误: 需要 --source 指定采集器，或使用 --list 查看可用采集器')
+            print('可用采集器: ' + ', '.join(ids))
+            return 2
+
+        if args.source not in ids:
+            print(f'未知采集器: {args.source}')
+            print('可用采集器: ' + ', '.join(ids))
+            return 2
+
+        params = {args.source: {'indicator': args.indicator}} if args.indicator else None
+        results = pipeline.run([args.source], params)
+        count = results.get(args.source, -1)
+        if count < 0:
+            print(f'{args.source}: 失败')
+            return 1
+        print(f'{args.source}: {count} 条')
+        return 0
+    finally:
+        try:
+            pipeline.metadata.conn.close()
+        except Exception:
+            pass
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Factor_DB - 量化金融数据管理系统',
@@ -300,6 +341,13 @@ def main(argv=None):
     p_quantile.add_argument('--start', type=_parse_date, help='开始日期 YYYY-MM-DD')
     p_quantile.add_argument('--end', type=_parse_date, help='结束日期 YYYY-MM-DD')
 
+    # collect
+    p_collect = subparsers.add_parser('collect', help='运行 OSINT 采集器并入库')
+    p_collect.add_argument('--db', default='factor_db.duckdb', help='数据库路径')
+    p_collect.add_argument('--list', action='store_true', help='列出已注册采集器')
+    p_collect.add_argument('--source', help='采集器 ID，如 akshare_macro')
+    p_collect.add_argument('--indicator', help='指标名（仅 akshare_macro 使用）')
+
     # validate
     p_validate = subparsers.add_parser('validate', help='生产库端到端验收（只读）')
     p_validate.add_argument('--db', help='数据库路径（默认与脚本一致）')
@@ -326,6 +374,7 @@ def main(argv=None):
         'ic-decay': cmd_ic_decay,
         'ic': cmd_ic,
         'quantile': cmd_quantile,
+        'collect': cmd_collect,
         'validate': cmd_validate,
     }
 

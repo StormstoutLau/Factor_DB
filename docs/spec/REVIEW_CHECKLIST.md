@@ -392,3 +392,33 @@
 - [x] DEVLOG 新增条目；ARCHITECTURE IC 章节补 `get_quantile_portfolio` 口径与 factor_pipeline 边界，子命令数 10 → 11、测试数 322 → 327
 - [x] README / README_zh 测试数 322 → 327；README 测试表新增 `test_quantile_portfolio.py`(5)
 
+## 十六、数据源接入 P3：`collect` 与采集器可发现性（2026-11-01）
+
+来源：[调研](../research/data_source_ingestion_research.md) / [设计](../design/data_source_ingestion_design.md) / [实施](../implementation/data_source_ingestion_implementation.md)
+
+### 事实核查（真实缺陷）
+- [x] `CollectorRegistry.auto_discover()` 在包模式下注册 **0 个**：`osint/registry.py` 硬编码 `package='osint'`，仅当工作目录为包目录时偶然可用
+- [x] `AKShareMacroCollector.INDICATOR_MAP` 12 个映射中 **7 个**函数在 AKShare 1.18.64 不存在（本地 `hasattr` 实测）
+- [x] AKShare 官方文档（1.20.21，2026-10-31）与本地实测交叉验证候选名：`gdp` / `ppi` / `m2_yearly` / `money_supply` / `lpr` / `fx_gold` / `hgjck`
+
+### 实现
+- [x] `auto_discover` 改为 `package = __package__ or 'osint'`，兼容包模式与扁平模式
+- [x] `INDICATOR_MAP` 主名全部修正；新增 `FUNCTION_CANDIDATES` 与 `_resolve_function` 候选回退
+- [x] 全候选缺失时 `extract_data` 返回 `None` → 空 DataFrame，不抛异常
+- [x] CLI `collect`：`--list` / `--source` / `--indicator` / `--db`；退出码 0 / 1 / 2 语义明确
+
+### TDD 与回归
+- [x] 红灯 6 failed（0 采集器、别名未回退、`collect` 未注册）→ 绿灯 7 passed
+- [x] 用例：发现 4 采集器、别名回退、全缺失降级、CLI 列表、缺 `--source`、未知 source、运行输出
+- [x] 测试注入假 AKShare 模块，CI 不触网
+- [x] 全量：**334 passed**；`ruff check .` All checks passed
+
+### 真实网络实跑（一次性，未纳入 CI）
+- [x] `collect --list` → 4 个采集器（akshare_macro / government / news_rss / worldbank），EXIT 0
+- [x] `collect --source akshare_macro --indicator CPI_MONTHLY` → **356 条**，EXIT 0
+- [x] 只读复查 `macro_data`：`CPI_MONTHLY` 356 行，1996-03-01 ~ 2025-09-10
+
+### 文档同步
+- [x] DEVLOG 新增条目；ARCHITECTURE 新增「数据源采集入口（P3）」，子命令数 11 → 12、测试数 327 → 334
+- [x] README / README_zh 测试数 327 → 334；README 测试表新增 `test_collect.py`(7)
+

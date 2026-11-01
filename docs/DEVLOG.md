@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### 数据源接入 P3：`collect` 子命令与采集器可发现性（2026-11-01）
+- **背景**: OSINT 采集能力已存在（4 个 collector + `OSINTPipeline._store` 自动路由），但 CLI 无入口；实测 `auto_discover()` 在包模式下注册 **0 个**（`osint/registry.py` 硬编码 `package='osint'`）（[调研](research/data_source_ingestion_research.md)）
+- **另一处真实缺陷**: `AKShareMacroCollector.INDICATOR_MAP` 12 个映射中 **7 个函数在 AKShare 1.18.64 已不存在**（`macro_china_money_supply_monthly` / `interest_rate` / `fx_reserves` / `import_export` 等）
+- **修复**: `auto_discover` 用 `__package__` 动态推导包名（兼容包/扁平两种导入风格）；映射改为主名 + `FUNCTION_CANDIDATES` 候选回退，全缺失时返回空表并记 error
+- **CLI**: `factor-db collect [--list] [--source ID] [--indicator NAME] [--db]`；退出码 0 成功 / 1 采集失败 / 2 用法错误
+- **TDD**: 红灯 6 failed（0 采集器、别名未回退、`collect` 未注册）→ 绿灯 7 passed
+- **真实网络实跑（临时库）**: 发现 4 个采集器；`CPI_MONTHLY` 入库 **356 条**（1996-03-01 ~ 2025-09-10），`EXIT 0`
+- **测试**: 全量 **334 passed**，`ruff` 零告警；CI 测试注入假 AKShare 模块，不触网
+- **文档**: [设计](design/data_source_ingestion_design.md) / [实施](implementation/data_source_ingestion_implementation.md)；ARCHITECTURE 新增「数据源采集入口（P3）」
+
 ### 分位数组合分层收益（2026-10-31）
 - **背景**: 排查「P2 因子评估扩展」是否重复造轮子。核查 `F:\Coding\factor_pipeline`：换手率 `compute_turnover`、多空 `compute_long_short_returns`、`compute_spread` 均已实现且有测试；**N 分位逐组收益 + 单调性未实现**（[调研](research/quantile_portfolio_research.md)）
 - **边界**: `factor_pipeline` 已将 `factor-db` 列为硬依赖，反向接入会成环；其 `FactorBacktestEngine` 还需外部 `factor-trading-v3`。故 Factor_DB 只做 SQL 口径的分层收益
