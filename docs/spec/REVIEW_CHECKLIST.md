@@ -434,10 +434,12 @@
 - [ ] `index_hist_sw` 签名 `(symbol, period)` **无日期参数**（`inspect.signature` 核实）
 - [ ] 东财 4 个接口（`stock_board_industry_name_em` / `_hist_em` / `stock_zh_index_daily_em` / `stock_zh_a_hist`）本机均 `RemoteDisconnected` → 不作主路径
 - [ ] 中证 000928 经 `index_stock_info` 互证为「中证能源」，发布日 2009-07-03 与新浪历史起点一致
+- [ ] `government_collector` 已输出 `entity_id`/`entity_type`/`data_subtype` 且带 `trade_date`，当前被误判为 macro、`_store` 返回 0（新库实测复现）
 
 ### 实现
 - [ ] `_detect_data_type` 在 macro 判定前增加 `entity_id` / `entity_type` / `data_subtype` → `alternative`
-- [ ] 4 条既有路由（macro / news / report / 纯 `trade_date+value`）行为不变，专项测试锁定
+- [ ] `akshare_macro` / `worldbank` → macro、`news_rss` → news 路由不变；纯 `trade_date+value` 合成用例仍 → macro
+- [ ] `government` 由 macro（`MacroLoader.validate` 以「缺少指标标识列」拒绝、`_store` 返回 0）修正为 alternative，并断言 `alternative_data` 实际入库 1 条
 - [ ] `SWIndustryCollector`：`meta['name']='sw_industry'`、`produced_events=[ALTERNATIVE_DATA]`
 - [ ] `transform_data` 输出 9 列：`trade_date` / `data_type='industry_return'` / `data_subtype=level` / `entity_type='industry'` / `entity_id` / `entity_name` / `value` / `data_quality` / `source_id`
 - [ ] 收益率 = 收盘价 `pct_change()`，首行 NaN 丢弃；`start_date` 在收益计算**之后**过滤

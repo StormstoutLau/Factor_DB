@@ -49,7 +49,18 @@ AlternativeLoader.load → alternative_data（PK data_id + ON CONFLICT DO NOTHIN
 
 ### 3.1 `_detect_data_type` 路由修复（`osint/pipeline.py`）
 
-**缺陷**：`macro_keywords = {'indicator_id', 'indicator', '指标', 'value_type', 'trade_date'}` 含 `trade_date`，而 `AlternativeLoader` 强制要求 `trade_date` + `value` 列（[alternative_loader.py#L117-L120](file:///f:/Coding/Factor_DB/loaders/alternative_loader.py#L117-L120)）。任何带 `trade_date` 的另类数据都会被误路由到 `macro` → `MacroLoader`（`macro_data` 主键 `trade_date+indicator_id+value_type`，`entity_id` 列会被丢弃/报错）。
+**缺陷（含一个已存在的静默丢数）**：`macro_keywords = {'indicator_id', 'indicator', '指标', 'value_type', 'trade_date'}` 含 `trade_date`，而 `AlternativeLoader` 强制要求 `trade_date` + `value` 列（[alternative_loader.py#L117-L120](file:///f:/Coding/Factor_DB/loaders/alternative_loader.py#L117-L120)）。任何带 `trade_date` 的另类数据都会被误判为 macro。
+
+实测 4 个采集器的输出列与当前路由：
+
+| 采集器 | 关键列 | 当前路由 | 结果 |
+|--------|--------|----------|------|
+| `akshare_macro` | `trade_date` / `indicator_id` | macro | ✅ 正常 |
+| `worldbank` | `trade_date` / `indicator_id` | macro | ✅ 正常 |
+| `news_rss` | `publish_date` / `title` / `sentiment_score`（无 `trade_date`） | news | ✅ 正常 |
+| `government` | `trade_date` / `entity_id` / `entity_type` / `data_subtype` | **macro（误判）** | ❌ `MacroLoader.validate` 以「缺少指标标识列」拒绝 → `_store` 返回 **0**，**政府政策采集一直静默丢数** |
+
+复现（新库 `init_database` + 构造 government 输出行）：`_detect_data_type → 'macro'`，`_store → 0`，`alternative_data` 与 `macro_data` 均为 0 行。
 
 **修复**：在 macro 判定**之前**增加另类数据判定：
 
@@ -59,7 +70,7 @@ if cols & alternative_keywords:
     return 'alternative'
 ```
 
-**回归风险**：现有 4 个采集器的输出列均不含 `entity_id`/`entity_type`/`data_subtype`（akshare_macro→`indicator_id`，worldbank→`indicator`，news_rss→`title`，government→`indicator`），路由行为不变。新增专项测试锁定 4 条既有路由 + 1 条新路由。
+**行为变化（非回归）**：`akshare_macro` / `worldbank` / `news_rss` 路由不变；`government` 由 macro（0 条）修正为 alternative（正常入库），属于缺陷修复。专项测试锁定 3 条不变路由 + government 修正路由 + 1 条新路由。
 
 ### 3.2 `SWIndustryCollector`（`osint/collectors/sw_industry_collector.py`）
 
@@ -68,7 +79,7 @@ if cols & alternative_keywords:
 | `meta` | `name='sw_industry'`，`categories=['industry', 'alternative', 'china']`，`required_keys=[]` |
 | `setup()` | `import akshare as ak; self._ak = ak`（与 `akshare_macro` 同款注入点，测试直接替换 `collector._ak`）；ImportError → `_error_state=True` |
 | `transform_query(params)` | 输出 `{level, codes, start_date}`；`level` 取 `params.get('level')`，缺省回退读 `params.get('indicator')`（兼容 CLI `--indicator second` 别名），默认 `'first'`；非法值回退 `'first'` 并记 warning |
-| `extract_data(query)` | `INFO_FN = {'first': sw_index_first_info, 'second': sw_index_second_info, 'third': sw_index_third_info}`；行业代码剥 `.SI` 后缀（实测带后缀 `KeyError`）；若 `query['codes']` 非空则过滤；逐指数拉全量日线，调用间 `time.sleep(config.rate_limit)`（测试传 `rate_limit=0`）；单指数异常记 warning 继续，**全部失败**记 error 返回 `None` |
+| `extract_data(query)` | `INFO_FN = {...}`；行业代码剥 `.SI` 后缀（实测带后缀 `KeyError`）；若 `query['codes']` 非空则过滤；逐指数拉全量日线，调用间 `time.sleep(config.rate_limit)`（测试传 `rate_limit=0`）；单指数异常记 warning 继续，**全部失败**记 error 返回 `None`（→ `transform_data` 空表 → `collect()` 空表） |
 | `transform_data(query, raw)` | 输出列：`trade_date(date) / data_type='industry_return' / data_subtype=level / entity_type='industry' / entity_id(6位代码) / entity_name / value(日收益率) / data_quality=100 / source_id='sw_industry'`；`收盘.pct_change()` 按日期升序计算，首行 NaN 丢弃，`dropna(subset=['value'])`；`start_date` 在收益率计算**之后**过滤（保证首日有前收盘） |
 | `produced_events()` | `[OSINTEventType.ALTERNATIVE_DATA]` |
 
@@ -105,7 +116,7 @@ if cols & alternative_keywords:
 | `index_hist_sw` 无日期参数 | 每次全量拉取 6482 行 | 可接受（20 万行级）；`start_date` 仅做本地过滤 |
 | 行业分类 2014/2021 版漂移 | 长周期回归口径不一致 | `data_subtype` 记录级别；抓取时间可由 `update_time` 审计；调研 §5 已注明 |
 | TLS 中间证书（changelog 1.20.16） | 升级 AKShare 后申万接口行为变化 | 本机 1.18.64 实测可用；锁定说明写入实施文档 |
-| 路由修复回归 | 既有采集器写错表 | §3.1 专项测试锁定 5 条路由 |
+| 路由修复改变既有行为 | `government` 由静默丢数（0 条）改为正常入库 | 专项测试锁定 3 条不变路由 + `government` 新路由，并断言 `alternative_data` 实际入库 |
 | 二/三级全量体积（85 万/217 万行） | 误操作导致大写入 | 默认仅一级；文档标注级别对应的量级 |
 
 ---
@@ -115,7 +126,7 @@ if cols & alternative_keywords:
 | # | 用例 | 断言 |
 |---|------|------|
 | 1 | `test_routing_entity_columns_to_alternative` | 含 `entity_id` 的 DataFrame → `_detect_data_type` 返回 `'alternative'` |
-| 2 | `test_routing_regression` | `indicator_id`→macro、`title`→news、`analyst`→report、纯 `trade_date+value`（无 entity 列）→ macro（既有行为锁定） |
+| 2 | `test_routing_regression` | 3 条不变路由（`indicator_id`→macro、`publish_date/title`→news、`analyst`→report）+ 纯 `trade_date+value`→macro；`government` 列→alternative（修正） |
 | 3 | `test_transform_produces_standard_columns` | FakeAK（info 返回 `801010.SI`，hist 返回 3 日收盘）→ 输出含 9 个标准列、`entity_id='801010'`、收益率 = 手算 `pct_change` |
 | 4 | `test_first_row_nan_dropped` | 每指数首行（无前收盘）不入结果 |
 | 5 | `test_partial_failure_tolerated` | FakeAK 第二个指数抛异常 → 仍返回第一个指数的数据 |
@@ -134,6 +145,7 @@ if cols & alternative_keywords:
 | 文件 | 动作 |
 |------|------|
 | `osint/collectors/sw_industry_collector.py` | 新增（采集器） |
+| `osint/collectors/__init__.py` | 导出 `SWIndustryCollector` 并加入 `__all__`（与现有 4 个采集器公共 API 一致） |
 | `osint/pipeline.py` | 修改（`_detect_data_type` 前置 alternative 判定，约 2 行） |
 | `tests/test_sw_industry.py` | 新增（10 用例） |
 | `docs/implementation/industry_return_ingestion_implementation.md` | 新增（实施后） |

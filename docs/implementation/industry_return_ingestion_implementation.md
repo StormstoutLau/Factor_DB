@@ -10,7 +10,7 @@
 
 | 步 | 内容 | 验证方式 |
 |----|------|----------|
-| S1 | 修复 `OSINTPipeline._detect_data_type`：在 macro 判定前增加 `entity_id/entity_type/data_subtype` → `alternative` | 单测：含 `entity_id` 返回 `alternative`；4 条既有路由不变 |
+| S1 | 修复 `OSINTPipeline._detect_data_type`：在 macro 判定前增加 `entity_id/entity_type/data_subtype` → `alternative` | 单测：含 `entity_id` 返回 `alternative`；3 条既有路由不变；`government` 改判 alternative 并实际入库 |
 | S2 | 新增 `SWIndustryCollector`（`setup/transform_query/extract_data/transform_data/produced_events`） | 单测：假 AKShare 注入，标准 9 列、收益率手算核对、首行 NaN 丢弃 |
 | S3 | 采集器容错与级别/日期参数 | 单测：单指数失败继续、全失败返回空、`level` 默认/别名/非法回退、`start_date` 在收益计算后过滤 |
 | S4 | 导出与可发现性 | 单测：`auto_discover` 注册 ≥5 且含 `sw_industry` |
@@ -26,7 +26,7 @@
 |------|------|
 | **版本** | 不新增依赖。`akshare>=1.14.0` 已在 `pyproject.toml`；本地实测 1.18.64（申万接口可用），官方文档 1.20.22。Python `>=3.9`（`from __future__ import annotations` 已用于 `osint` 包） |
 | **依赖** | 无新增/移除；CI 通过 `pip install -e ".[dev]"` 已安装 akshare，测试仍注入假模块，不触网 |
-| **兼容** | `_detect_data_type` 仅新增前置判定，既有 4 个采集器输出列（`indicator_id` / `indicator` / `title` / `analyst`）均不含 alternative 关键词，路由结果不变；`alternative_data` 表结构与 loader 不改；CLI 参数不改（子命令数保持 12） |
+| **兼容** | `_detect_data_type` 仅新增前置判定。实测既有 4 个采集器：`akshare_macro` / `worldbank`（含 `indicator_id`）→ macro 不变；`news_rss`（`publish_date`/`title`，无 `trade_date`）→ news 不变；`government`（含 `entity_id`/`entity_type`/`data_subtype` 且带 `trade_date`）当前被误判 macro、`MacroLoader.validate` 以「缺少指标标识列」拒绝、`_store` 返回 0 → **修复后改走 alternative 正常入库（缺陷修复，非回归）**。`alternative_data` 表结构与 loader 不改；CLI 参数不改（子命令数保持 12） |
 | **接口** | `SWIndustryCollector(BaseCollector)`，`meta['name']='sw_industry'`；`collect(params)` 由基类提供；`transform_query(params) -> Dict[str, Any]`；`extract_data(query) -> Optional[pd.DataFrame]`；`transform_data(query, raw_data) -> pd.DataFrame` |
 | **签名** | `transform_query` / `extract_data` 默认参数不引入可变默认值；`level` 走 `params.get('level')` → `params.get('indicator')` → `'first'` 三级回退；`codes: Optional[List[str]] = None`、`start_date: Optional[str] = None` 均为 `None` 默认 |
 | **低效操作** | 不使用 pandas `melt()`；不做逐行 INSERT（`AlternativeLoader` 用 `register` + `INSERT ... SELECT` 批量写入）；无全表扫描。唯一耗时项是 31 次串行网络请求（I/O 密集），按 `config.rate_limit` 节流 |
@@ -55,11 +55,12 @@
 | 位置 | Before | After |
 |------|--------|-------|
 | `osint/pipeline.py#_detect_data_type` | 先判 `macro_keywords`（含 `trade_date`），带 `trade_date` 的 DataFrame 一律进 macro | 先判 `alternative_keywords = {'entity_id','entity_type','data_subtype'}` → `'alternative'`；其余判定顺序不变 |
+| `government` 采集器路由 | macro → `MacroLoader.validate` 拒绝（「缺少指标标识列」）→ `_store` 返回 0，静默丢数 | alternative → 正常入库（行为变化，缺陷修复） |
 | 采集器注册 | 4 个：`akshare_macro/worldbank/news_rss/government` | 5 个：新增 `sw_industry` |
 | `osint/collectors/__init__.py` | `__all__` 4 项 | `__all__` 5 项 |
 | CLI | `collect --source ...`（12 子命令） | 不变；`--indicator` 对 `sw_industry` 解释为级别（`first/second/third`） |
 
-**误路由影响（Before 状态下）**：行业收益 DataFrame 含 `trade_date` 但无 `indicator_id` → 进入 `MacroLoader._insert_macro_data` → `raise ValueError("缺少 indicator_id 列")`（`loaders/macro_loader.py#L190-L194`）→ 被 `pipeline._store` 捕获记 error 返回 0 → **数据静默丢失、CLI 仍显示 `0 条` EXIT 0**。这是必须修 S1 的原因。
+**误路由影响（Before 状态下，已实测复现）**：行业收益与 government 数据含 `trade_date` 但无 `indicator_id` → 被判为 macro → `MacroLoader.validate` 检查指标列，日志「缺少指标标识列」并返回 `False`（`loaders/macro_loader.py#L228-L233`）→ `load()` 返回 0 → `pipeline._store` 记 0 条。**数据静默丢失，CLI 仍显示 `0 条` EXIT 0**。新库实测：`_detect_data_type → 'macro'`、`_store → 0`、`alternative_data`/`macro_data` 均 0 行。这是必须修 S1 的原因。
 
 ---
 
@@ -69,15 +70,15 @@
 
 | # | 用例 | 红灯预期 | 绿灯断言 |
 |---|------|----------|----------|
-| 1 | `test_detect_entity_columns_as_alternative` | 现有逻辑返回 `macro`（`AssertionError`） | 含 `entity_id` → `'alternative'` |
-| 2 | `test_detect_routing_regression` | 修复后若顺序写反会破坏既有路由 | `indicator_id`→macro、`title`→news、`analyst`→report、纯 `trade_date+value`→macro（锁定既有行为） |
-| 3 | `test_transform_standard_columns_and_return` | `AttributeError: SWIndustryCollector` | 9 列齐全；`entity_id='801010'`；收益率 = `close.pct_change()` 手算值 |
+| 1 | `test_routing_entity_columns_to_alternative` | 现有逻辑返回 `macro`（`AssertionError`） | 含 `entity_id` → `'alternative'` |
+| 2 | `test_routing_regression` | 修复后若顺序写反会破坏既有路由 | `indicator_id`→macro、`publish_date/title`→news、`analyst`→report、纯 `trade_date+value`→macro 不变；`government` 列→alternative（修正） |
+| 3 | `test_transform_produces_standard_columns` | `AttributeError: SWIndustryCollector` | 9 列齐全；`entity_id='801010'`；收益率 = `close.pct_change()` 手算值 |
 | 4 | `test_first_row_nan_dropped` | 未实现 | 每指数首行（无前收盘）不入结果；总行数 = Σ(行数-1) |
-| 5 | `test_partial_index_failure_tolerated` | 异常上抛或整批为空 | 第二个指数抛异常时仍返回第一个指数的数据 |
-| 6 | `test_all_index_failure_returns_empty` | 异常上抛 | 返回空 DataFrame，不抛异常 |
-| 7 | `test_level_default_alias_and_invalid` | 未实现 | 无参→`first`；`indicator='second'`→`second`；非法值→`first` |
-| 8 | `test_start_date_filter_keeps_prev_close` | 先过滤后计算会导致首行 NaN/丢收益 | `start_date` 在收益计算后过滤，首日收益率保留 |
-| 9 | `test_auto_discover_includes_sw_industry` | 注册 4 个 | 注册 ≥5 且 `sw_industry in ids` |
+| 5 | `test_partial_failure_tolerated` | 异常上抛或整批为空 | 第二个指数抛异常时仍返回第一个指数的数据 |
+| 6 | `test_all_failure_returns_empty` | 异常上抛 | 返回空 DataFrame，不抛异常 |
+| 7 | `test_level_default_and_alias` | 未实现 | 无参→`first`；`indicator='second'`→`second`；非法值→`first` |
+| 8 | `test_start_date_filter_after_returns` | 先过滤后计算会导致首行 NaN/丢收益 | `start_date` 在收益计算后过滤，首日收益率保留 |
+| 9 | `test_auto_discover_finds_sw_industry` | 注册 4 个 | 注册 ≥5 且 `sw_industry in ids` |
 | 10 | `test_cli_collect_sw_industry` | argparse 无该 source 时退出码 2 | mock Pipeline 下输出 `sw_industry: 1 条`，EXIT 0 |
 
 全量回归目标：**335 + 10 = 345 passed**，`ruff check .` 零告警。

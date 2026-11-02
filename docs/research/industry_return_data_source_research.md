@@ -17,7 +17,7 @@ return pd.DataFrame()
 ```
 
 - 仓库内**无任何调用方**（全库 grep `get_sector_sensitivity` 仅命中定义与 `CODE_WIKI.md`），属于纯预留接口。
-- 要完成该功能，最少需要：`行业标识 × 交易日 × 行业收益率`，且时间覆盖需与 `macro_data`（当前实测 CPI 起于 1996-03）可比。
+- 要完成该功能，最少需要：`行业标识 × 交易日 × 行业收益率`，且时间覆盖需尽量长（宏观指标实测最早 CPI 为 1996-03，行业指数抽样起于 1999-12-30，存在约 3 年缺口）。
 
 ### 数据需求拆解
 
@@ -36,7 +36,7 @@ return pd.DataFrame()
 
 | # | 数据源（AKShare 函数） | 底层来源 | 历史起点 | 行业口径 / 数量 | 免费 | 本次结论 |
 |---|------------------------|----------|----------|------------------|------|----------|
-| 1 | `index_hist_sw(symbol, period)` | 申万宏源研究指数 | **1999-12-30** | 申万一级 31 / 二级 131 / 三级 335 | ✅ 无 token | **首选**（本机实测可用） |
+| 1 | `index_hist_sw(symbol, period)` | 申万宏源研究指数 | **1999-12-30**（抽样实测） | 申万一级 31 / 二级 131 / 三级 335 | ✅ 无 token | **首选**（本机实测可用） |
 | 2 | `sw_index_first_info()` / `_second_info()` / `_third_info()` | 乐咕乐股（申万分类） | — | 分类目录 + 估值 | ✅ | 与 1 配套取行业代码/名称 |
 | 3 | `index_realtime_sw("一级行业")` | 申万宏源研究 | 实时快照 | 31 | ✅ | 可选，补最新一日 |
 | 4 | `stock_board_industry_name_em()` + `stock_board_industry_hist_em()` | 东方财富行业板块 | 文档称按板块指数历史 | 东财行业板块（数量未实测） | ✅ | **本机不可达**（见 §3.2），不作主路径 |
@@ -67,7 +67,7 @@ return pd.DataFrame()
 
 要点：
 - 返回**只有 OHLC + 量额，没有涨跌幅列**；日收益率需 `收盘.pct_change()` 自算。
-- 一级/二级/三级指数均从 1999-12-30 起，覆盖宏观指标历史绰绰有余。
+- 抽样实测的一级 `801010`、二级 `801016`、三级 `850111` 均从 1999-12-30 起（未全量枚举 31/131/335 个指数）；覆盖宏观指标历史绰绰有余。
 - 单指数 ≈6 s，31 个一级行业全量 ≈3 分钟；需限流，避免并发。
 
 ### 3.2 东方财富行业板块（本机不可达）
@@ -102,7 +102,7 @@ AKShare 源码注释明确提示 `stock_zh_index_daily` "大量抓取容易封 I
 ## 4. 结论与推荐
 
 1. **首选：申万行业指数（`index_hist_sw`）**
-   - 免费、无 token、1999 年起、一级/二级/三级全覆盖，且与"申万行业分类"这一国内最常用口径一致；
+   - 免费、无 token、抽样起点 1999-12-30、一级/二级/三级全覆盖（31/131/335），且与"申万行业分类"这一国内最常用口径一致；
    - 与 `macro_factor_link` 的月频宏观指标可按月对齐（日收益 → 月收益）；
    - 唯一硬约束：symbol 必须用 6 位代码（剥离 `.SI`），收益率自行由收盘价计算。
 2. **交叉校验：中证行业指数（新浪 `stock_zh_index_daily`）**
@@ -151,5 +151,5 @@ AKShare 源码注释明确提示 `stock_zh_index_daily` "大量抓取容易封 I
 2. AKShare 官方 changelog（1.20.16 · 申万接口 TLS 中间证书说明）：<https://akshare.akfamily.xyz/changelog.html>
 3. AKShare 源码 docstring（本机 1.18.64）：`index_hist_sw` 目标地址 `https://www.swsresearch.com/institute_sw/allIndex/releasedIndex/releasedetail?code=801001`；`stock_board_industry_hist_em` 目标地址 `https://quote.eastmoney.com/bk/90.BK1027.html`
 4. Tushare 官方文档 · 申万行业日线行情 `sw_daily`（5000 积分门槛）：<https://tushare.pro/wctapi/documents/327.md>
-5. Baostock 官方文档 · 指数数据（一级/二级行业指数 K 线，1990-12-19 起）：<http://baostock.com/baostock/index.php/指数数据>
+5. Baostock 官方知识库（首页 ›「指数数据」内页，一级/二级行业指数 K 线，1990-12-19 起；深链会重定向到首页，故只引首页）：<http://baostock.com/baostock/>
 6. 本地实跑记录（2026-11-02，AKShare 1.18.64）：申万一级/二级/三级列表与 `index_hist_sw` 日/周线、`index_realtime_sw`、东财 4 个接口失败复现、新浪中证 000928 历史 —— 见 §3 表格
