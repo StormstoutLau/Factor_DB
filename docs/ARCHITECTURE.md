@@ -65,7 +65,7 @@ Factor_DB/
 │   ├── multi_source_analysis.py
 │   └── sentiment_factor.py
 ├── osint/                   # OSINT 数据采集
-│   ├── collectors/          # akshare/government/news_rss/worldbank
+│   ├── collectors/          # akshare/government/news_rss/sw_industry/worldbank
 │   ├── base.py / pipeline.py / registry.py
 ├── utils/                   # 工具模块
 │   ├── code_utils.py        # normalize_stock_code()
@@ -73,7 +73,7 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（334 测试）
+├── tests/                   # 测试套件（345 测试）
 ├── benchmarks/              # 基准测试
 ├── cli.py                   # CLI（12 子命令，含 collect / ic / ic-decay / quantile / validate）
 └── docs/                    # 文档（含 spec/adr）
@@ -176,6 +176,11 @@ level1_parquet/trade_date=YYYY-MM-DD/data.parquet
 
 ### 数据源采集入口（P3）
 `factor-db collect` 调用 `OSINTPipeline.run`，按 DataFrame 列特征自动路由到 `macro_data` / `news_sentiment` / `alternative_data`。`CollectorRegistry.auto_discover` 用 `__package__` 动态推导包名，同时兼容 `Factor_DB.osint`（包模式）与 `osint`（扁平模式）。`AKShareMacroCollector` 通过 `FUNCTION_CANDIDATES` 对 AKShare 函数名做候选回退（实测 1.18.64 下原 12 个映射有 7 个失效），全缺失时返回空表并记录 error，不抛异常。CI 测试注入假模块，不触网。
+
+**路由前置判定（P4）**：`_detect_data_type` 在 macro 判定前先看 `entity_id` / `entity_type` / `data_subtype` → `alternative`。原因：`trade_date` 同属 macro 关键词，而另类数据（行业收益、government 政策）也带 `trade_date`，修复前 `government` 数据被误判 macro 并被 `MacroLoader` 拒绝，`_store` 长期返回 0（静默丢数）。
+
+### 行业收益率采集（P4）
+`factor-db collect --source sw_industry` 调用 `SWIndustryCollector`：`sw_index_{first|second|third}_info` 取行业目录，`index_hist_sw`（symbol 为 6 位代码，须剥离 `.SI`）逐指数拉全量日线，按 `收盘.pct_change()` 计算日收益率（首行无前收盘丢弃），写入 `alternative_data`（`data_type='industry_return'`、`entity_type='industry'`、`entity_id` 为行业代码、`data_subtype` 为 `first/second/third`）。`data_id` 含 `data_subtype`，`ON CONFLICT DO NOTHING` 保证幂等（上游历史修订不会被覆盖）。默认仅一级 31 个行业；实测 2026-11-02 入库 137,575 行 / 30 个行业，耗时 602.4 s。
 
 ---
 

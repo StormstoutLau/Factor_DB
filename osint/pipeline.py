@@ -184,7 +184,11 @@ class OSINTPipeline:
         macro_keywords = {'indicator_id', 'indicator', '指标', 'value_type', 'trade_date'}
         news_keywords = {'news_id', 'title', 'sentiment_score', 'sentiment_label', 'publish_date'}
         report_keywords = {'report_id', 'analyst', 'brokerage', 'rating_change'}
+        alternative_keywords = {'entity_id', 'entity_type', 'data_subtype'}
 
+        # 另类数据（行业收益/government 等）也带 trade_date，必须先于 macro 判定
+        if cols & alternative_keywords:
+            return 'alternative'
         if cols & macro_keywords and 'stock_code' not in cols:
             return 'macro'
         if cols & report_keywords:

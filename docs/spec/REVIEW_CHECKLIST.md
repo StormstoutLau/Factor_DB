@@ -426,48 +426,49 @@
 
 来源：[调研](../research/industry_return_data_source_research.md) / [设计](../design/industry_return_ingestion_design.md) / [实施](../implementation/industry_return_ingestion_implementation.md)
 
-> 状态：**编码前验收标准**，实施完成后逐项勾选。
+> 状态：**实施完成并通过验收**（2026-11-02），逐项已勾选。
 
 ### 事实核查（调研复验）
-- [ ] `index_hist_sw("801010", "day")` 实测 6482 行、1999-12-30 ~ 最新交易日，列仅 OHLC + 量额（无涨跌幅）
-- [ ] 申万一级/二级/三级行业数 = **31 / 131 / 335**；代码带 `.SI` 后缀，传 `801010.SI` 抛 `KeyError`
-- [ ] `index_hist_sw` 签名 `(symbol, period)` **无日期参数**（`inspect.signature` 核实）
-- [ ] 东财 4 个接口（`stock_board_industry_name_em` / `_hist_em` / `stock_zh_index_daily_em` / `stock_zh_a_hist`）本机均 `RemoteDisconnected` → 不作主路径
-- [ ] 中证 000928 经 `index_stock_info` 互证为「中证能源」，发布日 2009-07-03 与新浪历史起点一致
-- [ ] `government_collector` 已输出 `entity_id`/`entity_type`/`data_subtype` 且带 `trade_date`，当前被误判为 macro、`_store` 返回 0（新库实测复现）
+- [x] `index_hist_sw("801010", "day")` 实测 6482 行、1999-12-30 ~ 最新交易日，列仅 OHLC + 量额（无涨跌幅）
+- [x] 申万一级/二级/三级行业数 = **31 / 131 / 335**；代码带 `.SI` 后缀，传 `801010.SI` 抛 `KeyError`
+- [x] `index_hist_sw` 签名 `(symbol, period)` **无日期参数**（`inspect.signature` 核实）
+- [x] 东财 4 个接口（`stock_board_industry_name_em` / `_hist_em` / `stock_zh_index_daily_em` / `stock_zh_a_hist`）本机均 `RemoteDisconnected` → 不作主路径
+- [x] 中证 000928 经 `index_stock_info` 互证为「中证能源」，发布日 2009-07-03 与新浪历史起点一致
+- [x] `government_collector` 已输出 `entity_id`/`entity_type`/`data_subtype` 且带 `trade_date`，修复前被误判为 macro、`_store` 返回 0（新库实测复现）
 
 ### 实现
-- [ ] `_detect_data_type` 在 macro 判定前增加 `entity_id` / `entity_type` / `data_subtype` → `alternative`
-- [ ] `akshare_macro` / `worldbank` → macro、`news_rss` → news 路由不变；纯 `trade_date+value` 合成用例仍 → macro
-- [ ] `government` 由 macro（`MacroLoader.validate` 以「缺少指标标识列」拒绝、`_store` 返回 0）修正为 alternative，并断言 `alternative_data` 实际入库 1 条
-- [ ] `SWIndustryCollector`：`meta['name']='sw_industry'`、`produced_events=[ALTERNATIVE_DATA]`
-- [ ] `transform_data` 输出 9 列：`trade_date` / `data_type='industry_return'` / `data_subtype=level` / `entity_type='industry'` / `entity_id` / `entity_name` / `value` / `data_quality` / `source_id`
-- [ ] 收益率 = 收盘价 `pct_change()`，首行 NaN 丢弃；`start_date` 在收益计算**之后**过滤
-- [ ] 单指数失败记 warning 继续、全失败返回空；`setup()` ImportError 置 `_error_state`
-- [ ] 每指数按 `config.rate_limit` 节流；默认 `level='first'`，`--indicator` 可传 `second` / `third`
-- [ ] 入库 `alternative_data`，`data_id` 含 `data_subtype`，`ON CONFLICT DO NOTHING` 幂等
-- [ ] `osint/collectors/__init__.py` 导出 `SWIndustryCollector`；CLI 零改动（子命令数仍 12）
+- [x] `_detect_data_type` 在 macro 判定前增加 `entity_id` / `entity_type` / `data_subtype` → `alternative`
+- [x] `akshare_macro` / `worldbank` → macro、`news_rss` → news 路由不变；纯 `trade_date+value` 合成用例仍 → macro
+- [x] `government` 由 macro（`MacroLoader.validate` 以「缺少指标标识列」拒绝、`_store` 返回 0）修正为 alternative；临时库实测 `_store` 返回 1、`alternative_data` 实际 1 行、`macro_data` 0 行
+- [x] `SWIndustryCollector`：`meta['name']='sw_industry'`、`produced_events=[ALTERNATIVE_DATA]`
+- [x] `transform_data` 输出 9 列：`trade_date` / `data_type='industry_return'` / `data_subtype=level` / `entity_type='industry'` / `entity_id` / `entity_name` / `value` / `data_quality` / `source_id`
+- [x] 收益率 = 收盘价 `pct_change()`，首行 NaN 丢弃；`start_date` 在收益计算**之后**过滤
+- [x] 单指数失败记 warning 继续、全失败返回空；`setup()` ImportError 置 `_error_state`
+- [x] 每指数按 `config.rate_limit` 节流；默认 `level='first'`，`--indicator` 可传 `second` / `third`
+- [x] 入库 `alternative_data`，`data_id` 含 `data_subtype`，`ON CONFLICT DO NOTHING` 幂等
+- [x] `osint/collectors/__init__.py` 导出 `SWIndustryCollector`；CLI 零改动（子命令数仍 12）
 
 ### 工程细节
-- [ ] 无新增依赖（`akshare>=1.14.0` 已在 `pyproject.toml`）
-- [ ] 无 pandas `melt`、无逐行 INSERT（沿用 `AlternativeLoader` 批量 `INSERT ... SELECT`）
-- [ ] 默认一级约 **20.1 万行**，内存估算 <100 MB（三级约 217 万行、数百 MB 量级），远低于 32GB
-- [ ] 已知限制记录：`ON CONFLICT DO NOTHING` 不覆盖上游历史值修订
+- [x] 无新增依赖（`akshare>=1.14.0` 已在 `pyproject.toml`）
+- [x] 无 pandas `melt`、无逐行 INSERT（沿用 `AlternativeLoader` 批量 `INSERT ... SELECT`）
+- [x] 默认一级理论约 **20.1 万行**，内存估算 <100 MB（三级约 217 万行、数百 MB 量级），远低于 32GB；实跑 30 行业入库 137,575 行（见实施 §6）
+- [x] 已知限制记录：`ON CONFLICT DO NOTHING` 不覆盖上游历史值修订
 
 ### TDD 与回归
-- [ ] 红灯：`tests/test_sw_industry.py` 10 个用例全部失败（`AttributeError` / `AssertionError`）
-- [ ] 绿灯：`tests/test_sw_industry.py` **10 passed**
-- [ ] 全量：**345 passed**（335 + 10）；`ruff check .` All checks passed
-- [ ] CI 不触网：假 AKShare 模块注入 `collector._ak`，无真实请求
+- [x] 红灯：**9 failed / 1 passed**（7 个 `ModuleNotFoundError` + 2 个路由断言失败；CLI 用例因 CLI 零改动预先通过）
+- [x] 绿灯：`tests/test_sw_industry.py` **10 passed**
+- [x] 全量：**345 passed**（335 + 10）；`ruff check .` All checks passed
+- [x] CI 不触网：假 AKShare 模块注入 `collector._ak`，无真实请求
 
 ### 真实网络实跑（一次性，未纳入 CI）
-- [ ] `collect --list` → **5 个**采集器（含 `sw_industry`），EXIT 0
-- [ ] `collect --source sw_industry` → 一级行业 ≈ **20.1 万条**，EXIT 0
-- [ ] 只读复查 `alternative_data`：`data_type='industry_return'`、`entity_type='industry'`、覆盖 31 个一级 `entity_id`、日期起于 1999-12-30
-- [ ] 重跑同命令行数不增长（`ON CONFLICT DO NOTHING` 幂等）
+- [x] `collect --list` → **5 个**采集器（含 `sw_industry`），EXIT 0
+- [x] `collect --source sw_industry` → 首轮 **137,575 条**、重跑 **140,989 条**，EXIT 0（两轮各 30/31 行业）
+- [x] 只读复查 `alternative_data`：`data_type='industry_return'`、`entity_type='industry'`、30 个一级 `entity_id`、日期 2000-01-04 ~ 2026-11-02（原始 1999-12-30 首行无前收盘被丢弃）
+- [x] 幂等：对 `801010`（6482 行）连续两次 `_store`，`store counts=6482 6482`、表行数 137575→137575
+- [x] 瞬时故障结论：两轮各失败 1 个且对象不同（首轮 `801040`、次轮 `801770`），失败位置随请求变化；`801040` 复跑正常入库 6482 行
 
 ### 文档同步
-- [ ] 调研 / 设计 / 实施三文档术语、规模数字、接口签名一致
-- [ ] DEVLOG 新增条目；ARCHITECTURE 采集器 4 → 5、测试数 335 → 345
-- [ ] README / README_zh 测试数 335 → 345；README 测试表新增 `test_sw_industry.py`(10)
+- [x] 调研 / 设计 / 实施三文档术语、规模数字、接口签名一致
+- [x] DEVLOG 新增条目；ARCHITECTURE 采集器 4 → 5、测试数 335 → 345
+- [x] README / README_zh 测试数 335 → 345；README 测试表新增 `test_sw_industry.py`(10)
 

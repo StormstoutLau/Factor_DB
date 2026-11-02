@@ -7,6 +7,17 @@
 
 ## 2026-10（最近）
 
+### 行业收益率入库 P4：`sw_industry` 采集器与路由修复（2026-11-02）
+- **背景**: `MacroFactorLink.get_sector_sensitivity` 的 TODO 需要行业收益率。调研确认申万 `index_hist_sw` 免费可用（一级/二级/三级 31/131/335，抽样起于 1999-12-30，仅 OHLC 无涨跌幅）；东财 4 个接口本机整体不可达；Tushare `sw_daily` 需 5000 积分（[调研](research/industry_return_data_source_research.md)）
+- **新发现缺陷**: `_detect_data_type` 中 `trade_date` 属 macro 关键词，而 `government_collector` 已输出 `entity_id`/`entity_type`/`data_subtype` 且带 `trade_date` → 一直被误判 macro，`MacroLoader.validate` 以「缺少指标标识列」拒绝、`_store` 返回 0，**政府政策采集长期静默丢数**
+- **修复**: macro 判定前增加 `entity_id`/`entity_type`/`data_subtype` → `alternative`；`akshare_macro`/`worldbank`/`news_rss` 路由不变，`government` 恢复入库
+- **采集器**: `SWIndustryCollector`：`sw_index_*_info` 取目录，`index_hist_sw`（须剥 `.SI` 后缀）逐指数拉日线，`收盘.pct_change()` 算日收益（首行丢弃），单指数失败容忍，按 `rate_limit` 节流；入库 `alternative_data`（`data_type='industry_return'`、`entity_id`=行业代码、`data_subtype`=级别），`ON CONFLICT DO NOTHING` 幂等
+- **TDD**: 红灯 **9 failed / 1 passed**（CLI 用例因 CLI 零改动预先通过）→ 绿灯 10 passed
+- **真实网络实跑（临时库）**: `--list` 5 个采集器；一级 **30/31** 行业首轮入库 **137,575 行**（`801040` 单次上游返回非 JSON 被容错跳过），2000-01-04 ~ 2026-11-02，耗时 **602.4 s**；同一指数重复写入行数不增长
+- **重跑复核**: 重建临时库后重跑入库 **140,989 行 / 30 行业**，本次失败对象为 `801770`、`801040` 恢复 6482 行 → 失败随请求变化，属上游瞬时故障，「单指数失败继续」容错生效（两轮并集覆盖 31 个行业）
+- **测试**: 全量 **345 passed**，`ruff` 零告警；CI 注入假 AKShare，不触网
+- **文档**: [调研](research/industry_return_data_source_research.md) / [设计](design/industry_return_ingestion_design.md) / [实施](implementation/industry_return_ingestion_implementation.md)；ARCHITECTURE 新增「行业收益率采集（P4）」
+
 ### PEP 639 license 元数据迁移（2026-11-02）
 - **背景**: `license = {text = "MIT"}` 是 PEP 621 旧式表写法；setuptools ≥77 起按 PEP 639 要求 SPDX 表达式 + `license-files`，旧写法构建时告警且 wheel 元数据无 `License-Expression` / `License-File`
 - **变更**: `license = "MIT"`、`license-files = ["LICENSE"]`；`build-system.requires` 提升到 `setuptools>=77.0.0`（PEP 639 支持起点）

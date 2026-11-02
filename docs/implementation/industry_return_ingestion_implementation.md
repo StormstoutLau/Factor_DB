@@ -33,7 +33,7 @@
 | **内存** | 默认一级：31 × 6481 ≈ **20.1 万行 × 9 列**，估算 <100 MB；二级约 85 万行；三级约 217 万行（估算数百 MB），仍远低于 32GB。构建时按指数逐个 append 后 `concat`，峰值 = 全部结果 + 单指数临时表 |
 | **数据一致性** | `alternative_data` 无 PIT `loaded_at`，`update_time` 由 loader 写 `CURRENT_TIMESTAMP`；主键 `data_id` + `ON CONFLICT DO NOTHING` 保证重跑幂等，但**历史值被上游修订时不会覆盖**（已知限制，见 §5 风险）。`value` 为价格指数日收益率，首行无前收盘时丢弃，避免 NaN 入库 |
 | **失败语义** | 单指数异常记 `warning` 继续；全部失败返回 `None` → `collect()` 产出空表 → `pipeline.run` 返回 0 → CLI `0 条` / EXIT 0（与 `akshare_macro` 一致）；`setup()` ImportError 置 `_error_state` |
-| **限流** | 每指数 `time.sleep(self.config.rate_limit)`；`OSINTPipeline` 默认 `CollectorConfig.rate_limit=1.0` → 31 指数约 3.6 分钟；测试显式传 `rate_limit=0` |
+| **限流** | 每指数 `time.sleep(self.config.rate_limit)`；`OSINTPipeline` 默认 `CollectorConfig.rate_limit=1.0`。调研抽样 ≈6 s/指数，实跑 31 个指数耗时 **602.4 s**（≈18 s/指数），见 §6.1；测试显式传 `rate_limit=0` |
 
 ---
 
@@ -87,23 +87,58 @@
 
 ## 6. 生产实跑与验收（实施后回填）
 
-计划步骤（临时库，避免污染生产库）：
+实跑命令（临时库，避免污染生产库）：
 
 ```
-factor-db init --db %TEMP%\sw_test.duckdb
-factor-db collect --db %TEMP%\sw_test.duckdb --list
-factor-db collect --db %TEMP%\sw_test.duckdb --source sw_industry
-factor-db collect --db %TEMP%\sw_test.duckdb --source sw_industry --indicator second   # 抽样少量 codes 时改程序调用
+py -3 cli.py init --db %TEMP%\sw_p4_verify.duckdb
+py -3 cli.py collect --db %TEMP%\sw_p4_verify.duckdb --list
+py -3 cli.py collect --db %TEMP%\sw_p4_verify.duckdb --source sw_industry
 ```
 
-验收口径：
-- `--list` 显示 5 个采集器（含 `sw_industry`）；
-- 一级行业入库行数 ≈ 31 × 6481 ≈ 20.1 万（允许接口缺失个别指数，误差以实际为准）；
-- 只读复查 `alternative_data`：`data_type='industry_return'`、`entity_type='industry'`、`entity_id` 覆盖 31 个一级行业、日期范围 1999-12-30 起；
-- 重跑同一命令，行数不增长（`ON CONFLICT DO NOTHING` 幂等）；
-- `EXIT 0`。
+### 6.1 首轮实测（2026-11-02）
 
-> 实跑结果与偏差说明：待实施阶段回填。
+| 项 | 结果 |
+|----|------|
+| `--list` | **5 个**采集器，含 `sw_industry`，EXIT 0 |
+| 采集耗时 | **602.4 s**（31 个指数串行；上游单指数约 18 s，高于调研阶段抽样的 ≈6 s） |
+| 入库行数 | **137,575 行** / **30 个一级行业**（`801040` 单次返回非 JSON，被容错跳过） |
+| 日期范围 | **2000-01-04 ~ 2026-11-02**（原始指数起于 1999-12-30，首行无前收盘被丢弃） |
+| 数据质量 | `value` 空值 **0**；`data_id` 重复 **0** |
+| 分组核对 | 全部为 `data_type='industry_return'` / `data_subtype='first'` / `entity_type='industry'` |
+| 样本行业 | `801010` 等前 5 个行业各 6482 行（6483 原始行 - 首行） |
+
+### 6.2 幂等验证
+
+对同一指数 `801010`（6482 行）执行两次 `_store`：
+
+```
+store counts = 6482 6482 | table before/after = 137575 137575
+801010 rows after double-write = 6482
+```
+
+`ON CONFLICT DO NOTHING` 生效，重复写入不增长。
+
+### 6.3 偏差与处理
+
+| 偏差 | 说明 | 处理 |
+|------|------|------|
+| 耗时 602 s vs 估算 3.6 min | 上游单指数实际 ≈18 s，抽样阶段 ≈6 s | 如实记录；`rate_limit` 维持 1 s，不额外加压 |
+| `801040` 缺失（30/31） | `Expecting value: line 1 column 1` = 上游返回非 JSON 的一次性故障 | 容错语义按设计跳过；已后台重跑确认是否恢复（结果见 §6.4） |
+| 入库起点 2000-01-04 | 收益率需要前收盘，1999-12-30 首行 NaN 被丢弃 | 设计即此口径，非缺陷 |
+
+### 6.4 重跑复核（2026-11-02，重建临时库后全量重跑）
+
+| 项 | 结果 |
+|----|------|
+| 入库行数 | **140,989 行** / **30 个一级行业** |
+| 失败指数 | **`801770`**（`Expecting value: line 1 column 1`，容错跳过） |
+| `801040` | 本次正常入库 **6482 行**（首轮失败为一次性故障） |
+| 日期范围 | 2000-01-04 ~ 2026-11-02 |
+| 数据质量 | `value` 空值 0；`data_id` 重复 0；全部 `industry_return` / `first` / `industry` |
+| 单行业行数 | 1,174 ~ 6,482（行业上市时间不同） |
+| 耗时 | 约 470 s（进程 20:18:42 启动，DB 20:26:31 落盘） |
+
+**结论**：两轮各失败 1 个指数且对象不同（首轮 `801040`、次轮 `801770`），失败位置随请求变化，确认是上游单次返回非 JSON 的瞬时故障，而非某指数固定不可用；采集器「单指数失败记 warning 继续」的容错语义按设计生效。两轮并集可覆盖 31 个一级行业。
 
 ---
 
