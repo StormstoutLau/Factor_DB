@@ -515,7 +515,7 @@ AlternativeQuery
 |----|------|
 | `MacroFactorLink` | 宏观指标与股票因子的关联分析 |
 
-**内部依赖**：`MacroQuery` + `FactorQuery`
+**内部依赖**：`MacroQuery` + `FactorQuery` + `AlternativeQuery`
 
 ```
 MacroFactorLink
@@ -523,8 +523,12 @@ MacroFactorLink
 ├── calculate_all_correlations(macro_indicators, factor_names, ...) -> DataFrame
 ├── build_macro_factor(macro_indicators, lookback, method) -> DataFrame
 ├── identify_macro_regime(start_date, end_date, n_regimes) -> DataFrame
-└── get_sector_sensitivity(macro_indicator, sectors, ...) -> DataFrame  # 预留接口
+└── get_sector_sensitivity(macro_indicator, sectors, start_date, end_date,
+                          level='first', transform='pct_change', min_obs=12) -> DataFrame
 ```
+
+**行业敏感度**：行业日收益按月复利、宏观按月取最后观测后变换，逐行业单因子 OLS，
+输出 `beta/correlation/t_stat/r_squared/n_obs/start_date/end_date`；无数据返回同列空表。
 
 **相关性方法**：支持 `pearson` 和 `spearman` 两种方法。
 

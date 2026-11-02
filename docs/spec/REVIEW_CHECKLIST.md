@@ -472,3 +472,52 @@
 - [x] DEVLOG 新增条目；ARCHITECTURE 采集器 4 → 5、测试数 335 → 345
 - [x] README / README_zh 测试数 335 → 345；README 测试表新增 `test_sw_industry.py`(10)
 
+---
+
+## 十八、行业宏观敏感度（`get_sector_sensitivity`）（2026-11-02）
+
+来源：[方法调研](../research/sector_sensitivity_research.md) / [设计](../design/sector_sensitivity_design.md) / [实施](../implementation/sector_sensitivity_implementation.md)
+
+> 状态：**实施完成并通过验收**（2026-11-02），逐项已勾选。
+
+### 事实核查（调研复验）
+- [x] 学术来源 ≥2 个独立库（OpenAlex / Crossref）且 DOI/URL 可回溯
+- [x] `macro_data` 主键 `(trade_date, indicator_id, value_type)`、`alternative_data` 唯一键 `(trade_date, data_type, data_subtype, entity_type, entity_id)` 与 schema 一致
+- [x] 生产库 `macro_data` / `alternative_data` 均为 0 行（2026-11-02 只读实测）
+- [x] 依赖无 `scipy`，因此不输出 p 值（`pyproject.toml` 核对）
+- [x] 行业收益为价格指数日收益，`macro_data.trade_date` 为统计期而非发布日
+
+### 设计 / 实现
+- [x] 签名前 4 参数不变，追加 `level='first'` / `transform='pct_change'` / `min_obs=12`（均有默认值）
+- [x] `__init__` 增加 `AlternativeQuery`，只读连接，不影响现有方法
+- [x] 行业日收益按月复利：`(1+value).groupby(entity, period).prod()-1`
+- [x] 宏观按自然月取最后观测，`pct_change(fill_method=None)` / `diff` / `level` 三种变换
+- [x] 单因子 OLS：`beta=Sxy/Sxx`、`correlation=Sxy/sqrt(Sxx·Syy)`、`t_stat=beta/se`、`r_squared=1-SSE/SST`
+- [x] 输出固定 10 列：`industry_code/industry_name/level/beta/correlation/t_stat/r_squared/n_obs/start_date/end_date`
+- [x] 按 `|beta|` 降序、`industry_code` 升序排序
+- [x] `level` 仅允许 `None/first/second/third`；`transform` 仅允许三值；`min_obs<3` → `ValueError`
+- [x] 宏观/行业为空、宏观无变化 → 返回同列空表；单行业样本不足 → 跳过不中断
+- [x] 同期关联语义写入 docstring：非 PIT、非预测信号
+
+### 工程细节
+- [x] 无新增依赖（`pandas`/`numpy` 已有；不使用 `scipy`）
+- [x] 无 pandas `melt`、无逐行 SQL；宏观与行业各一次查询
+- [x] 内存：一级行业约 14 万行 × 10 列，远低于 32GB；三级约 217 万行仍可控
+- [x] 不修改表结构 / loader / CLI；仓库内无既有调用方
+
+### TDD 与回归
+- [x] 红灯：`tests/test_macro_factor_link.py` **11 failed**（原实现返回无列空表）
+- [x] 绿灯：11 passed
+- [x] 全量：**356 passed**（345 + 11）；`ruff check .` All checks passed
+
+### 真实数据实跑（临时库，未纳入 CI）
+- [x] 临时库采集 `CPI_MONTHLY`（356 行）+ 3 个一级行业（`801010/801030/801040`，19,446 行）
+- [x] `get_sector_sensitivity` 返回 **3 行**、`n_obs=179`、beta 有限、按 |beta| 排序
+- [x] 输出区间 2010-02-01 ~ 2025-09-30，与宏观/行业内连接结果一致；无 NaN（常量序列除外）
+- [x] 偏差记录：`801020` 不在申万一级目录；`801040` 两次瞬时失败后重试成功
+
+### 文档同步
+- [x] 调研 / 设计 / 实施三文档术语、签名、输出列一致
+- [x] DEVLOG 新增条目；ARCHITECTURE analytics 说明；测试数 345 → 356
+- [x] README / README_zh 测试数 345 → 356；README 测试表新增 `test_macro_factor_link.py`(11)
+

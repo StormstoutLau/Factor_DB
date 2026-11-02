@@ -73,7 +73,7 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（345 测试）
+├── tests/                   # 测试套件（356 测试）
 ├── benchmarks/              # 基准测试
 ├── cli.py                   # CLI（12 子命令，含 collect / ic / ic-decay / quantile / validate）
 └── docs/                    # 文档（含 spec/adr）
@@ -181,6 +181,9 @@ level1_parquet/trade_date=YYYY-MM-DD/data.parquet
 
 ### 行业收益率采集（P4）
 `factor-db collect --source sw_industry` 调用 `SWIndustryCollector`：`sw_index_{first|second|third}_info` 取行业目录，`index_hist_sw`（symbol 为 6 位代码，须剥离 `.SI`）逐指数拉全量日线，按 `收盘.pct_change()` 计算日收益率（首行无前收盘丢弃），写入 `alternative_data`（`data_type='industry_return'`、`entity_type='industry'`、`entity_id` 为行业代码、`data_subtype` 为 `first/second/third`）。`data_id` 含 `data_subtype`，`ON CONFLICT DO NOTHING` 保证幂等（上游历史修订不会被覆盖）。默认仅一级 31 个行业；实测 2026-11-02 入库 137,575 行 / 30 个行业，耗时 602.4 s。
+
+### 行业宏观敏感度（P5）
+`MacroFactorLink.get_sector_sensitivity` 读取 `macro_data` 与 `alternative_data`：行业日收益按月复利，宏观按自然月取最后观测并做 `pct_change` / `diff` / `level` 变换，逐行业做单因子 OLS `r_i = α + β·Δm + ε`，输出 `beta` / `correlation` / `t_stat` / `r_squared` / `n_obs` / 区间，按 beta 绝对值排序。默认一级行业、`min_obs=12`；宏观/行业无数据时返回同列空表。`macro_data.trade_date` 为统计期而非发布日，结果定位为同期关联（非 PIT、非预测信号）。临时库实测 3 个行业、CPI 月度变化 179 期，beta 全部有限。
 
 ---
 

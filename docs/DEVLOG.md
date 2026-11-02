@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### 行业宏观敏感度 P5：`get_sector_sensitivity` 实现（2026-11-02）
+- **背景**: `MacroFactorLink.get_sector_sensitivity` 原为 TODO（只取宏观数据后返回空表）；P4 已把申万一级行业日收益写入 `alternative_data`，本任务补齐敏感度计算
+- **方法调研**: APT 因子 beta 是敏感度标准表述；行业日收益按月复利、宏观按月取最后观测后做变化，再做单因子 OLS（`r_i = α + β·Δm + ε`）；水平值易伪回归，默认 `pct_change`，可切 `diff`/`level`（[调研](research/sector_sensitivity_research.md)）
+- **实现**: `get_sector_sensitivity` 追加 `level='first'` / `transform='pct_change'` / `min_obs=12`；输出 `beta/correlation/t_stat/r_squared/n_obs/start_date/end_date` 等 10 列，按 beta 绝对值降序；无数据返回同列空表；`__init__` 增加 `AlternativeQuery`
+- **统计口径**: 无 `scipy`，不输出 p 值；`t_stat = beta/se`，`r_squared = 1 - SSE/SST`；`Sxx=0` 跳过。结果定位同期关联（非 PIT、非预测）
+- **TDD**: 红灯 **11 failed**（原实现返回无列空表）→ 绿灯 11 passed
+- **真实数据 E2E（临时库）**: `CPI_MONTHLY` 356 行 + `801010/801030/801040` 19,446 行；输出 3 行、`n_obs=179`、2010-02-01 ~ 2025-09-30，beta 全部有限并按绝对值排序（`801020` 不在申万一级目录，`801040` 两次瞬时失败后重试成功）
+- **测试**: 全量 **356 passed**，`ruff` 零告警
+- **文档**: [调研](research/sector_sensitivity_research.md) / [设计](design/sector_sensitivity_design.md) / [实施](implementation/sector_sensitivity_implementation.md)；ARCHITECTURE 新增「行业宏观敏感度（P5）」
+
 ### 行业收益率入库 P4：`sw_industry` 采集器与路由修复（2026-11-02）
 - **背景**: `MacroFactorLink.get_sector_sensitivity` 的 TODO 需要行业收益率。调研确认申万 `index_hist_sw` 免费可用（一级/二级/三级 31/131/335，抽样起于 1999-12-30，仅 OHLC 无涨跌幅）；东财 4 个接口本机整体不可达；Tushare `sw_daily` 需 5000 积分（[调研](research/industry_return_data_source_research.md)）
 - **新发现缺陷**: `_detect_data_type` 中 `trade_date` 属 macro 关键词，而 `government_collector` 已输出 `entity_id`/`entity_type`/`data_subtype` 且带 `trade_date` → 一直被误判 macro，`MacroLoader.validate` 以「缺少指标标识列」拒绝、`_store` 返回 0，**政府政策采集长期静默丢数**
