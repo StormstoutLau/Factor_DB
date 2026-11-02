@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### 宏观采集器日期与取值列修复 P6（2026-11-02）
+- **背景**: 生产库首次 `collect` 实测 12 个宏观指标仅 6 个入库；6 个失败均因中文日期（`2026年09月份`、`2026年第1-3季度`、`2008年01月份`）。同时发现五列发布报告（今值/预测值/前值）入库的是「前值」：CPI 1996-03-01 存 2.1，原始今值 2.3（[调研](research/macro_collector_date_value_research.md)）
+- **修复**: `_parse_trade_date` 正则解析中文月/季度；日期列关键词补 `月份`/`季度`；`VALUE_COLUMNS` 映射 6 个多列指标主数据列；`_pick_value_column` 采用「映射 → 今值 → 首个匹配列 → 第二列」；非法日期行丢弃并告警
+- **日期语义**: 五列报告保留发布日；中文月/季度映射统计期起点/季末；不做月份回移
+- **TDD**: 红灯 **11 failed / 7 passed**（含 CPI 取到前值 0.1）→ 绿灯 18 passed
+- **生产重采**: 清空 12 个指标旧行后重采，12/12 `exit 0`，实际 **4,358 行**（63 行今值为空）；锚点 CPI 1996-03-01=2.3、PMI 2026-10=49.3、GDP 2026Q1-3=1,071,071.2、M2 2026-09=3,596,289.70、外储=34,002.51、出口=447,184,259.939
+- **P5 复跑**: `get_sector_sensitivity('CPI_MONTHLY')` 返回 31 行、beta 有限（`pct_change` n_obs 40~172，`diff` 45~186）
+- **测试**: 全量 **367 passed**，`ruff` 零告警
+- **文档**: [调研](research/macro_collector_date_value_research.md) / [设计](design/macro_collector_date_value_design.md) / [实施](implementation/macro_collector_date_value_implementation.md)；ARCHITECTURE 新增「宏观采集归一化（P6）」
+
 ### 行业宏观敏感度 P5：`get_sector_sensitivity` 实现（2026-11-02）
 - **背景**: `MacroFactorLink.get_sector_sensitivity` 原为 TODO（只取宏观数据后返回空表）；P4 已把申万一级行业日收益写入 `alternative_data`，本任务补齐敏感度计算
 - **方法调研**: APT 因子 beta 是敏感度标准表述；行业日收益按月复利、宏观按月取最后观测后做变化，再做单因子 OLS（`r_i = α + β·Δm + ε`）；水平值易伪回归，默认 `pct_change`，可切 `diff`/`level`（[调研](research/sector_sensitivity_research.md)）

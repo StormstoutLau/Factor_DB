@@ -521,3 +521,56 @@
 - [x] DEVLOG 新增条目；ARCHITECTURE analytics 说明；测试数 345 → 356
 - [x] README / README_zh 测试数 345 → 356；README 测试表新增 `test_macro_factor_link.py`(11)
 
+---
+
+## 十九、宏观采集器日期与取值列修复（P6）（2026-11-02）
+
+来源：[调研](../research/macro_collector_date_value_research.md) / [设计](../design/macro_collector_date_value_design.md) / [实施](../implementation/macro_collector_date_value_implementation.md)
+
+> 状态：**实施完成并通过验收**（2026-11-02），逐项已勾选。
+
+### 事实核查
+- [x] 生产库实测 6 个指标失败：`GDP_QUARTERLY` / `PPI_MONTHLY` / `PMI_MANUFACTURING` / `M2_MONTHLY` / `FX_RESERVES` / `IMPORT_EXPORT`
+- [x] 失败报错均为中文日期：`2026年第1-3季度`、`2026年09月份`、`2026年10月份`、`2008年01月份`
+- [x] `CPI_MONTHLY` 1996-03-01 入库 2.1，原始今值 2.3、前值 2.1 → 入库为「前值」
+- [x] `PPI_YEARLY` / `M2_YEARLY` 同样存「前值」
+- [x] AKShare 1.18.64 源码确认 6 个多列指标的列名与主数据列
+- [x] `MacroLoader._insert_macro_data` 使用 `INSERT OR REPLACE`，覆盖同主键；非重叠旧行需先删除
+
+### 设计 / 实现
+- [x] `_parse_trade_date` 支持 `YYYY年MM月份`、`YYYY年第N季度`、`YYYY年第N-M季度`、`YYYY年MM月DD日`、标准日期
+- [x] 月份 → 当月 1 日；季度 → 季末；累计季度取最后季末
+- [x] 日期列关键词增加 `月份`、`季度`
+- [x] `VALUE_COLUMNS` 覆盖 GDP_QUARTERLY/PPI_MONTHLY/PMI/M2_MONTHLY/FX_RESERVES/IMPORT_EXPORT
+- [x] `_pick_value_column` 顺序：指标映射 → `今值` → 首个匹配列 → 第二列
+- [x] 非法日期行丢弃并 warning；映射列缺失回退；无可用列返回空表
+- [x] `trade_date` 语义写入 docstring：五列报告为发布日，中文期间为统计期
+- [x] 不改 `INDICATOR_MAP` / `FUNCTION_CANDIDATES` / 表结构 / CLI
+
+### 工程细节
+- [x] 无新增依赖（仅 `re` / `calendar`）
+- [x] 无新增 SQL / 无逐行 INSERT（沿用 loader 批量写入）
+- [x] 单指标 ≤1,539 行，`Series.map` 开销可忽略
+- [x] Python 3.9 兼容
+
+### TDD 与回归
+- [x] 红灯：`tests/test_collect.py` 新增 **11 failed**（加上原 7 个共 7 passed）
+- [x] 绿灯：18 passed
+- [x] 全量：**367 passed**（356 + 11）；`ruff check .` All checks passed
+
+### 生产库重采
+- [x] 12 个指标全部 `exit 0`，实际合计 **4,358 行**（63 行 `今值` 为空被丢弃）
+- [x] `CPI_MONTHLY` 1996-03-01 = **2.3**
+- [x] `PMI_MANUFACTURING` 2026-10-01 = **49.3**
+- [x] `GDP_QUARTERLY` 2026-09-30 = **1,071,071.2**
+- [x] `M2_MONTHLY` 2026-09-01 = **3,596,289.70**
+- [x] `FX_RESERVES` 2026-09-01 = **34,002.51**
+- [x] `IMPORT_EXPORT` 2026-09-01 = **447,184,259.939**
+- [x] 重采前先清空 12 个指标，避免旧「前值」行残留
+- [x] 重采后 `get_sector_sensitivity('CPI_MONTHLY')` 返回 **31 行**、beta 有限（`pct_change` n_obs 40~172，`diff` 45~186）
+
+### 文档同步
+- [x] 调研 / 设计 / 实施三文档术语、映射、签名一致
+- [x] DEVLOG 新增条目；ARCHITECTURE 采集器说明；测试数 356 → 367
+- [x] README / README_zh 测试数 356 → 367；README 测试表 `test_collect.py` 7 → 18
+

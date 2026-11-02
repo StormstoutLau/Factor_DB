@@ -73,7 +73,7 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（356 测试）
+├── tests/                   # 测试套件（367 测试）
 ├── benchmarks/              # 基准测试
 ├── cli.py                   # CLI（12 子命令，含 collect / ic / ic-decay / quantile / validate）
 └── docs/                    # 文档（含 spec/adr）
@@ -184,6 +184,9 @@ level1_parquet/trade_date=YYYY-MM-DD/data.parquet
 
 ### 行业宏观敏感度（P5）
 `MacroFactorLink.get_sector_sensitivity` 读取 `macro_data` 与 `alternative_data`：行业日收益按月复利，宏观按自然月取最后观测并做 `pct_change` / `diff` / `level` 变换，逐行业做单因子 OLS `r_i = α + β·Δm + ε`，输出 `beta` / `correlation` / `t_stat` / `r_squared` / `n_obs` / 区间，按 beta 绝对值排序。默认一级行业、`min_obs=12`；宏观/行业无数据时返回同列空表。`macro_data.trade_date` 为统计期而非发布日，结果定位为同期关联（非 PIT、非预测信号）。临时库实测 3 个行业、CPI 月度变化 179 期，beta 全部有限。
+
+### 宏观采集归一化（P6）
+`AKShareMacroCollector.transform_data` 用正则解析中文期间：`YYYY年MM月份` → 当月 1 日、`YYYY年第N[-M]季度` → 季末；五列发布报告优先取 `今值`（不再取 `前值`）；多列统计表按 `VALUE_COLUMNS` 映射主数据列（GDP 绝对值 / PPI 当月 / PMI 制造业指数 / M2 数量 / 外储数值 / 出口金额），未知指标回退首个匹配列。生产库重采 12 个指标，实际入库 4,358 行（63 行 `今值` 为空被丢弃）。
 
 ---
 

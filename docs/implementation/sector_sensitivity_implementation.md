@@ -124,4 +124,4 @@
 | CPI 末端 2025-09-10 | AKShare 宏观数据发布滞后 | 内连接后敏感度区间止于 2025-09，属预期 |
 | beta 量级小 | CPI 月度变化（`pct_change`）幅度小，beta 为“每单位变化”系数 | 量纲由 `transform` 决定，横向比较看排序与 t 值 |
 
-> 生产库当前 `macro_data` / `alternative_data` 均为 0 行，故 E2E 在临时库完成；生产使用需先执行 `collect`。
+> P5 验收时生产库 `macro_data` / `alternative_data` 均为 0 行，故 E2E 在临时库完成。P6 后生产库已入库 4,358 行宏观（12 指标）与 144,057 行一级行业（31 个），生产复跑 `get_sector_sensitivity` 返回 31 行、beta 有限。
