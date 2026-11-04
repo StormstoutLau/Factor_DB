@@ -52,12 +52,30 @@ PMI_VALUES = [50.0]
 for _d in PMI_DIFFS:
     PMI_VALUES.append(PMI_VALUES[-1] + _d)
 
+# 率型指标：含 4 个 0.0 与多个负值，pct_change 会产生 ±Inf 与符号反转
+RATE_VALUES = [
+    0.0, 0.5, -0.2, 0.3, 0.0, 0.7, -0.1, 0.4, 0.2, -0.3,
+    0.0, 0.5, -0.2, 0.3, 0.1, -0.1, 0.4, 0.0, 0.6, -0.2,
+    0.3, 0.1, -0.1, 0.2,
+]
+RET_RATE = [0.0] + [
+    float(2 * dx) + noise for dx, noise in zip(np.diff(RATE_VALUES), NOISE)
+]
+
 
 def _beta(x, y):
     """独立复算 OLS 斜率"""
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     return float(np.sum((x - x.mean()) * (y - y.mean())) / np.sum((x - x.mean()) ** 2))
+
+
+def _pct_without_inf(values):
+    """复算 pct_change 并过滤 ±Inf/NaN，返回有效值与对应掩码"""
+    x = pd.Series(values, dtype=float).pct_change(fill_method=None)
+    x = x.replace([np.inf, -np.inf], np.nan)
+    mask = x.notna().to_numpy()
+    return x.to_numpy(dtype=float)[mask], mask
 
 
 class TestSectorSensitivity(unittest.TestCase):
@@ -293,6 +311,67 @@ class TestSectorSensitivity(unittest.TestCase):
         row = df[df['industry_code'] == '801010'].iloc[0]
         self.assertEqual('行业A', row['industry_name'])
         self.assertEqual('first', row['level'])
+
+    def test_default_rate_uses_diff(self):
+        """率型指标默认 diff：beta 与手算一致、n_obs=23"""
+        self._seed_macro('CPI_MONTHLY', RATE_VALUES)
+        self._seed_industry('801050', '率型行业', 'first', RET_RATE)
+        df = self._link().get_sector_sensitivity(
+            'CPI_MONTHLY', sectors=['801050']
+        )
+        self.assertEqual(1, len(df))
+        expected = _beta(np.diff(RATE_VALUES), RET_RATE[1:])
+        self.assertAlmostEqual(expected, float(df['beta'].iloc[0]), places=9)
+        self.assertEqual(23, int(df['n_obs'].iloc[0]))
+
+    def test_transform_none_resolves_rate_to_diff(self):
+        """显式 transform=None 与默认一致（率型 → diff）"""
+        self._seed_macro('CPI_MONTHLY', RATE_VALUES)
+        self._seed_industry('801050', '率型行业', 'first', RET_RATE)
+        link = self._link()
+        default = link.get_sector_sensitivity('CPI_MONTHLY', sectors=['801050'])
+        explicit = link.get_sector_sensitivity(
+            'CPI_MONTHLY', sectors=['801050'], transform=None
+        )
+        self.assertAlmostEqual(
+            float(default['beta'].iloc[0]),
+            float(explicit['beta'].iloc[0]),
+            places=12,
+        )
+        self.assertEqual(
+            int(default['n_obs'].iloc[0]), int(explicit['n_obs'].iloc[0])
+        )
+
+    def test_explicit_pct_change_overrides_rate_default(self):
+        """显式 pct_change 优先于率型默认 diff，且过滤 ±Inf"""
+        self._seed_macro('CPI_MONTHLY', RATE_VALUES)
+        self._seed_industry('801050', '率型行业', 'first', RET_RATE)
+        df = self._link().get_sector_sensitivity(
+            'CPI_MONTHLY', sectors=['801050'], transform='pct_change'
+        )
+        x_pct, mask = _pct_without_inf(RATE_VALUES)
+        y_pct = np.asarray(RET_RATE[1:], dtype=float)[mask[1:]]
+        self.assertAlmostEqual(
+            _beta(x_pct, y_pct), float(df['beta'].iloc[0]), places=9
+        )
+        self.assertEqual(int(mask.sum()), int(df['n_obs'].iloc[0]))
+        self.assertLess(int(df['n_obs'].iloc[0]), len(RET_RATE) - 1)
+
+    def test_default_level_indicator_stays_pct_change(self):
+        """非率型指标默认仍为 pct_change"""
+        link = self._link()
+        default = link.get_sector_sensitivity('TEST_MACRO', sectors=['801010'])
+        explicit = link.get_sector_sensitivity(
+            'TEST_MACRO', sectors=['801010'], transform='pct_change'
+        )
+        self.assertAlmostEqual(
+            float(default['beta'].iloc[0]),
+            float(explicit['beta'].iloc[0]),
+            places=12,
+        )
+        self.assertEqual(
+            int(default['n_obs'].iloc[0]), int(explicit['n_obs'].iloc[0])
+        )
 
 
 if __name__ == '__main__':

@@ -574,3 +574,48 @@
 - [x] DEVLOG 新增条目；ARCHITECTURE 采集器说明；测试数 356 → 367
 - [x] README / README_zh 测试数 356 → 367；README 测试表 `test_collect.py` 7 → 18
 
+---
+
+## 二十、CPI_MONTHLY beta 修复（P7）（2026-11-04）
+
+来源：[调研](../research/cpi_monthly_beta_finiteness_research.md) / [设计](../design/cpi_monthly_beta_fix_design.md) / [实施](../implementation/cpi_monthly_beta_fix_implementation.md)
+
+> 状态：**已验收**（2026-11-04），全部项通过。
+
+### 事实核查
+- [x] CPI_MONTHLY 354 个月中 21 个值为 0.0，`pct_change` 产生 21 个 ±Inf
+- [x] 142 个月为负值，137 次负基数转移出现符号反转
+- [x] 过滤后有效变化 332 个、`Sxx=1478.035>0`；2010+ 对齐 173 个月
+- [x] 31 个行业 `n_obs=40~173`，全部 ≥ `min_obs=12`
+- [x] beta 有限源于 Inf 过滤 + Sxx 守卫 + 样本量守卫
+
+### 设计 / 实现
+- [x] 新增 `RATE_TYPE_INDICATORS`：CPI_MONTHLY/CPI_YEARLY/PPI_YEARLY/M2_YEARLY/GDP_YEARLY/INTEREST_RATE
+- [x] `transform` 默认 `None`：率型 → `diff`，其余 → `pct_change`
+- [x] 显式 `transform` 优先；非法值仍抛 `ValueError`
+- [x] 未知指标回落 `pct_change`（旧行为）
+- [x] 日志记录解析后的 transform
+- [x] 输出 10 列、排序、`min_obs`、空表语义不变
+- [x] 不改 schema / 采集器 / CLI
+
+### 工程细节
+- [x] 无新增依赖
+- [x] 解析在查询前完成，无额外 SQL / pandas 操作
+- [x] `RATE_TYPE_INDICATORS` 为 `frozenset`，共 6 个指标
+- [x] Python 3.9 兼容
+
+### TDD 与回归
+- [x] 红灯：新增 4 个用例 **2 failed / 2 passed**
+- [x] 绿灯：`tests/test_macro_factor_link.py` **15 passed**
+- [x] 全量：**371 passed**（367 + 4）；`ruff check .` All checks passed
+
+### 生产库复跑
+- [x] 默认 `CPI_MONTHLY`：31 行、`n_obs=45~186`、beta 有限、典型 beta ≈ 0.023/百分点
+- [x] 显式 `transform='pct_change'`：31 行、`n_obs=40~172`、beta ≈ 0.007（复现旧口径）
+- [x] 两种口径均无 NaN/Inf；默认结果不使用零基数 Inf 月份
+
+### 文档同步
+- [x] 调研 / 设计 / 实施三文档术语、映射、签名一致
+- [x] DEVLOG 新增条目；ARCHITECTURE 默认口径说明；测试数 367 → 371
+- [x] README / README_zh 测试数 367 → 371；README 测试表 `test_macro_factor_link.py` 11 → 15
+

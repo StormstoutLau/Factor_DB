@@ -7,6 +7,14 @@
 
 ## 2026-10（最近）
 
+### CPI_MONTHLY beta 修复 P7：率型指标默认 diff（2026-11-04）
+- **背景**: P6 重采后 CPI_MONTHLY 入库值为环比（%），P5 默认再取 `pct_change`：21 个零值产生 ±Inf 被丢弃（约 5.9% 观测）、137 次负基数转移符号反转、x 达 ±800%，beta 仅 ~0.007 且方向不可解释（[调研](research/cpi_monthly_beta_finiteness_research.md)）
+- **修复**: 新增 `RATE_TYPE_INDICATORS`（CPI_MONTHLY/CPI_YEARLY/PPI_YEARLY/M2_YEARLY/GDP_YEARLY/INTEREST_RATE）；`transform` 默认改为 `None`，率型 → `diff`、水平型 → `pct_change`，显式值优先
+- **TDD**: 新增 4 用例，红灯 **2 failed / 13 passed** → 绿灯 **15 passed**
+- **生产复跑**: 默认 diff 31 行、`n_obs=45~186`、beta -0.0113~0.0232（典型 0.023/百分点）；显式 `pct_change` 31 行、`n_obs=40~172`、beta ≈0.0076；两者均无 NaN/Inf，默认与显式 diff 完全一致
+- **测试**: 全量 **371 passed**，`ruff` 零告警
+- **文档**: [调研](research/cpi_monthly_beta_finiteness_research.md) / [设计](design/cpi_monthly_beta_fix_design.md) / [实施](implementation/cpi_monthly_beta_fix_implementation.md)；ARCHITECTURE 补充默认口径
+
 ### 宏观采集器日期与取值列修复 P6（2026-11-02）
 - **背景**: 生产库首次 `collect` 实测 12 个宏观指标仅 6 个入库；6 个失败均因中文日期（`2026年09月份`、`2026年第1-3季度`、`2008年01月份`）。同时发现五列发布报告（今值/预测值/前值）入库的是「前值」：CPI 1996-03-01 存 2.1，原始今值 2.3（[调研](research/macro_collector_date_value_research.md)）
 - **修复**: `_parse_trade_date` 正则解析中文月/季度；日期列关键词补 `月份`/`季度`；`VALUE_COLUMNS` 映射 6 个多列指标主数据列；`_pick_value_column` 采用「映射 → 今值 → 首个匹配列 → 第二列」；非法日期行丢弃并告警

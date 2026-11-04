@@ -524,11 +524,14 @@ MacroFactorLink
 ├── build_macro_factor(macro_indicators, lookback, method) -> DataFrame
 ├── identify_macro_regime(start_date, end_date, n_regimes) -> DataFrame
 └── get_sector_sensitivity(macro_indicator, sectors, start_date, end_date,
-                          level='first', transform='pct_change', min_obs=12) -> DataFrame
+                          level='first', transform=None, min_obs=12) -> DataFrame
 ```
 
 **行业敏感度**：行业日收益按月复利、宏观按月取最后观测后变换，逐行业单因子 OLS，
 输出 `beta/correlation/t_stat/r_squared/n_obs/start_date/end_date`；无数据返回同列空表。
+`transform=None` 时按指标类型自动选择：率型指标（`RATE_TYPE_INDICATORS`：CPI_MONTHLY /
+CPI_YEARLY / PPI_YEARLY / M2_YEARLY / GDP_YEARLY / INTEREST_RATE）用 `diff`，
+水平型指标用 `pct_change`；显式传值优先。
 
 **相关性方法**：支持 `pearson` 和 `spearman` 两种方法。
 

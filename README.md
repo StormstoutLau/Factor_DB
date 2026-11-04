@@ -64,7 +64,7 @@ Factor_DB/
 │   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
 │   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
 │   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
-├── tests/                       # Test Suite (367 tests, all passing)
+├── tests/                       # Test Suite (371 tests, all passing)
 ├── benchmarks/                  # Performance Benchmarks
 ├── docs/                        # Documentation
 └── cli.py                       # CLI Entry Point
@@ -332,7 +332,7 @@ DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions 
 python -m pytest tests/ -v
 ```
 
-**367 tests, all passing.** Coverage includes:
+**371 tests, all passing.** Coverage includes:
 
 | Test Suite | Tests | What's Covered |
 |-----------|-------|----------------|
@@ -356,7 +356,7 @@ python -m pytest tests/ -v
 | `test_quantile_portfolio.py` | 5 | Quantile group returns, monotonicity, CLI `quantile` |
 | `test_collect.py` | 18 | Collector auto-discovery, AKShare fallback/normalization, CLI `collect` |
 | `test_sw_industry.py` | 10 | SW industry routing, returns and CLI collect |
-| `test_macro_factor_link.py` | 11 | Sector monthly returns, macro transforms, OLS sensitivity |
+| `test_macro_factor_link.py` | 15 | Sector monthly returns, auto diff/pct transforms, OLS sensitivity |
 
 ## Documentation
 

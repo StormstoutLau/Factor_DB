@@ -27,6 +27,13 @@ SENSITIVITY_COLUMNS = [
     't_stat', 'r_squared', 'n_obs', 'start_date', 'end_date',
 ]
 
+# 率型指标：值可为 0 或负（如 CPI 环比、各类同比、利率），
+# 对率再取 pct_change 会产生零基数 Inf 与负基数符号反转，默认改用 diff。
+RATE_TYPE_INDICATORS = frozenset({
+    'CPI_MONTHLY', 'CPI_YEARLY', 'PPI_YEARLY',
+    'M2_YEARLY', 'GDP_YEARLY', 'INTEREST_RATE',
+})
+
 
 class MacroFactorLink:
     """宏观-因子关联分析
@@ -205,7 +212,7 @@ class MacroFactorLink:
                               start_date: Optional[date] = None,
                               end_date: Optional[date] = None,
                               level: Optional[str] = 'first',
-                              transform: str = 'pct_change',
+                              transform: Optional[str] = None,
                               min_obs: int = 12) -> pd.DataFrame:
         """获取行业对宏观指标的敏感度
 
@@ -222,7 +229,8 @@ class MacroFactorLink:
             start_date: 开始日期
             end_date: 结束日期
             level: 行业级别：first/second/third；None 表示不限制
-            transform: 宏观变换：pct_change/diff/level
+            transform: 宏观变换：pct_change/diff/level；None 表示按指标类型
+                自动选择（率型指标用 diff，水平型指标用 pct_change）
             min_obs: 行业最少有效月度观测数（小于 3 抛 ValueError）
 
         Returns:
@@ -235,6 +243,11 @@ class MacroFactorLink:
         """
         if level not in {None, 'first', 'second', 'third'}:
             raise ValueError(f"未知的行业级别: {level}")
+        if transform is None:
+            transform = (
+                'diff' if macro_indicator in RATE_TYPE_INDICATORS
+                else 'pct_change'
+            )
         if transform not in {'pct_change', 'diff', 'level'}:
             raise ValueError(f"未知的宏观变换: {transform}")
         if min_obs < 3:
