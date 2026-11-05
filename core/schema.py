@@ -26,6 +26,11 @@ from Factor_DB.utils.sql_utils import (
 )
 
 from .connection import DuckDBConnection
+from .macro_temporal import (
+    MACRO_TEMPORAL_RULES,
+    resolve_period_date,
+    resolve_publish_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +165,10 @@ class SchemaManager:
         'macro_data': '''
             CREATE TABLE IF NOT EXISTS macro_data (
                 trade_date DATE NOT NULL,
+                period_date DATE,
+                publish_date DATE,
+                publish_date_quality VARCHAR DEFAULT 'unknown',
+                loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 indicator_id VARCHAR NOT NULL,
                 indicator_name VARCHAR,
                 value DOUBLE,
@@ -282,6 +291,10 @@ class SchemaManager:
             'CREATE INDEX IF NOT EXISTS idx_macro_indicator ON macro_data(indicator_id)',
         'idx_macro_date_indicator': 
             'CREATE INDEX IF NOT EXISTS idx_macro_date_indicator ON macro_data(trade_date, indicator_id)',
+        'idx_macro_period_date':
+            'CREATE INDEX IF NOT EXISTS idx_macro_period_date ON macro_data(period_date, indicator_id)',
+        'idx_macro_publish_date':
+            'CREATE INDEX IF NOT EXISTS idx_macro_publish_date ON macro_data(publish_date, indicator_id)',
         'idx_macro_indicator_category': 
             'CREATE INDEX IF NOT EXISTS idx_macro_indicator_category ON macro_indicators(category)',
         # 舆情数据索引
@@ -547,6 +560,156 @@ class SchemaManager:
         except Exception as e:
             logger.error(f"获取表统计失败 {table_name}: {e}")
             return None
+
+    def migrate_macro_data_temporal(self) -> dict:
+        """为 macro_data 补齐统计期/发布日期/PIT 字段
+
+        幂等迁移：
+            1. 备份原表；
+            2. 增加 period_date / publish_date / publish_date_quality / loaded_at；
+            3. 按 core.macro_temporal 规则回填；
+            4. 补 source_id / indicator_name，标注 M2 0.0 异常；
+            5. 建 period/publish 索引并返回对账统计。
+
+        Returns:
+            rows_total / period_date_filled / publish_date_filled /
+            publish_date_unknown / duplicate_period_rows
+        """
+        import pandas as pd
+
+        if not self.table_exists('macro_data'):
+            self.create_table('macro_data')
+
+        backup_name = f"macro_data_backup_{datetime.now():%Y%m%d}"
+
+        with self.conn as conn:
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS {quote_identifier(backup_name)} "
+                "AS SELECT * FROM macro_data"
+            )
+
+            existing = {
+                row[1] for row in
+                conn.execute("PRAGMA table_info('macro_data')").fetchall()
+            }
+            additions = {
+                'period_date': 'DATE',
+                'publish_date': 'DATE',
+                'publish_date_quality': "VARCHAR DEFAULT 'unknown'",
+                'loaded_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+            }
+            for name, ddl in additions.items():
+                if name not in existing:
+                    conn.execute(
+                        f'ALTER TABLE macro_data ADD COLUMN {name} {ddl}'
+                    )
+
+            conn.execute("""
+                UPDATE macro_data
+                SET loaded_at = COALESCE(update_time, CURRENT_TIMESTAMP)
+                WHERE loaded_at IS NULL
+            """)
+
+            rows = conn.execute("""
+                SELECT trade_date, indicator_id, value_type
+                FROM macro_data
+            """).fetchdf()
+
+            updates = []
+            for row in rows.itertuples(index=False):
+                raw_date = row.trade_date
+                if isinstance(raw_date, datetime):
+                    raw_date = raw_date.date()
+                period_date = resolve_period_date(row.indicator_id, raw_date)
+                publish_date, quality = resolve_publish_info(
+                    row.indicator_id, raw_date, period_date
+                )
+                updates.append({
+                    'trade_date': raw_date,
+                    'indicator_id': row.indicator_id,
+                    'value_type': row.value_type,
+                    'period_date': period_date,
+                    'publish_date': publish_date,
+                    'publish_date_quality': quality,
+                })
+
+            if updates:
+                frame = pd.DataFrame(updates)
+                conn.register('macro_temporal_updates', frame)
+                conn.execute("""
+                    UPDATE macro_data SET
+                        period_date = u.period_date,
+                        publish_date = u.publish_date,
+                        publish_date_quality = u.publish_date_quality
+                    FROM macro_temporal_updates u
+                    WHERE macro_data.trade_date = u.trade_date
+                      AND macro_data.indicator_id = u.indicator_id
+                      AND macro_data.value_type = u.value_type
+                """)
+                conn.unregister('macro_temporal_updates')
+
+            params: dict[str, Any] = {}
+            indicator_list = bind_in(
+                params, 'indicator', list(MACRO_TEMPORAL_RULES)
+            )
+            conn.execute(
+                "UPDATE macro_data SET source_id = 'akshare_macro' "
+                f"WHERE source_id IS NULL AND indicator_id IN ({indicator_list})",
+                params,
+            )
+
+            conn.execute("""
+                UPDATE macro_data
+                SET indicator_name = mi.indicator_name
+                FROM macro_indicators mi
+                WHERE macro_data.indicator_id = mi.indicator_id
+                  AND mi.indicator_name IS NOT NULL
+            """)
+
+            conn.execute("""
+                UPDATE macro_data
+                SET data_quality = 50
+                WHERE indicator_id = 'M2_YEARLY' AND value = 0.0
+            """)
+
+            conn.execute(
+                'CREATE INDEX IF NOT EXISTS idx_macro_period_date '
+                'ON macro_data(period_date, indicator_id)'
+            )
+            conn.execute(
+                'CREATE INDEX IF NOT EXISTS idx_macro_publish_date '
+                'ON macro_data(publish_date, indicator_id)'
+            )
+
+            rows_total = conn.execute(
+                "SELECT COUNT(*) FROM macro_data"
+            ).fetchone()[0]
+            period_filled = conn.execute(
+                "SELECT COUNT(*) FROM macro_data WHERE period_date IS NOT NULL"
+            ).fetchone()[0]
+            publish_filled = conn.execute(
+                "SELECT COUNT(*) FROM macro_data WHERE publish_date IS NOT NULL"
+            ).fetchone()[0]
+            publish_unknown = conn.execute(
+                "SELECT COUNT(*) FROM macro_data "
+                "WHERE publish_date_quality = 'unknown'"
+            ).fetchone()[0]
+            duplicate_period_rows = conn.execute("""
+                SELECT COALESCE(SUM(c - 1), 0) FROM (
+                    SELECT indicator_id, value_type, period_date, COUNT(*) AS c
+                    FROM macro_data
+                    GROUP BY 1, 2, 3
+                    HAVING COUNT(*) > 1
+                )
+            """).fetchone()[0]
+
+        return {
+            'rows_total': int(rows_total),
+            'period_date_filled': int(period_filled),
+            'publish_date_filled': int(publish_filled),
+            'publish_date_unknown': int(publish_unknown),
+            'duplicate_period_rows': int(duplicate_period_rows),
+        }
 
     def init_database(self, safe_only: bool = False) -> bool:
         """初始化完整数据库

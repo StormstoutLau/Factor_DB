@@ -155,7 +155,7 @@ class OSINTPipeline:
         try:
             if data_type == 'macro':
                 loader = MacroLoader(loader_config)
-                count = loader.load(df)
+                count = loader.load(df, source_id=source_id)
             elif data_type == 'news':
                 loader = NewsLoader(loader_config)
                 count = loader.load(df, data_type='news')

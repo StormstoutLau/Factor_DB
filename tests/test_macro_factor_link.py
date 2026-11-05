@@ -8,7 +8,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -119,6 +119,31 @@ class TestSectorSensitivity(unittest.TestCase):
             c.execute(
                 'INSERT INTO macro_data (trade_date, indicator_id, indicator_name, '
                 'value, value_type, source_id) SELECT * FROM df'
+            )
+
+    def _seed_macro_temporal(self, indicator_id, values, periods, publishes):
+        """写入带 period/publish 的宏观行（P8 时间字段）"""
+        rows = [
+            (
+                publishes[i], periods[i], publishes[i], 'exact',
+                datetime(2026, 11, 4, 10, 0), indicator_id, indicator_id,
+                float(values[i]), 'raw', 100, 'akshare_macro',
+            )
+            for i in range(len(values))
+        ]
+        conn = DuckDBConnection(self.db_path)
+        with conn as c:
+            df = pd.DataFrame(  # noqa: F841
+                rows,
+                columns=['trade_date', 'period_date', 'publish_date',
+                         'publish_date_quality', 'loaded_at', 'indicator_id',
+                         'indicator_name', 'value', 'value_type', 'data_quality',
+                         'source_id'],
+            )
+            c.execute(
+                'INSERT INTO macro_data (trade_date, period_date, publish_date, '
+                'publish_date_quality, loaded_at, indicator_id, indicator_name, '
+                'value, value_type, data_quality, source_id) SELECT * FROM df'
             )
 
     def _seed_industry(self, code, name, level, returns, dates=None):
@@ -372,6 +397,37 @@ class TestSectorSensitivity(unittest.TestCase):
         self.assertEqual(
             int(default['n_obs'].iloc[0]), int(explicit['n_obs'].iloc[0])
         )
+
+    def test_sensitivity_as_of_excludes_latest(self):
+        """as_of 截断最新宏观期，n_obs 减少"""
+        periods = [m.end_time.date() for m in MONTHS]
+        publishes = [p + timedelta(days=9) for p in periods]
+        self._seed_macro_temporal('CPI_MONTHLY', RATE_VALUES, periods, publishes)
+        self._seed_industry('801050', '率型行业', 'first', RET_RATE)
+
+        link = self._link()
+        full = link.get_sector_sensitivity('CPI_MONTHLY', sectors=['801050'])
+        cut = link.get_sector_sensitivity(
+            'CPI_MONTHLY', sectors=['801050'], as_of=publishes[-2]
+        )
+        self.assertEqual(1, len(full))
+        self.assertEqual(1, len(cut))
+        self.assertLess(int(cut['n_obs'].iloc[0]), int(full['n_obs'].iloc[0]))
+
+    def test_sensitivity_uses_period_alignment(self):
+        """敏感度按统计期对齐，而非发布日期"""
+        periods = [m.end_time.date() for m in MONTHS]
+        publishes = [p + timedelta(days=9) for p in periods]
+        self._seed_macro_temporal('CPI_MONTHLY', RATE_VALUES, periods, publishes)
+        self._seed_industry('801050', '率型行业', 'first', RET_RATE)
+
+        df = self._link().get_sector_sensitivity(
+            'CPI_MONTHLY', sectors=['801050']
+        )
+        self.assertEqual(1, len(df))
+        self.assertEqual(23, int(df['n_obs'].iloc[0]))
+        self.assertEqual(date(2023, 2, 1), df['start_date'].iloc[0])
+        self.assertEqual(date(2024, 12, 31), df['end_date'].iloc[0])
 
 
 if __name__ == '__main__':

@@ -15,6 +15,12 @@ from typing import Union, Optional
 
 import pandas as pd
 
+from Factor_DB.core.macro_temporal import (
+    resolve_period_date,
+    resolve_publish_info,
+)
+from Factor_DB.utils.sql_utils import bind_in
+
 from .base import BaseLoader
 
 logger = logging.getLogger(__name__)
@@ -39,7 +45,9 @@ class MacroLoader(BaseLoader):
     """
 
     def load(self, data_path: Union[Path, pd.DataFrame],
-            indicator_id: Optional[str] = None) -> int:
+            indicator_id: Optional[str] = None,
+            *,
+            source_id: Optional[str] = None) -> int:
         """加载宏观数据
 
         Args:
@@ -66,6 +74,11 @@ class MacroLoader(BaseLoader):
 
         # 标准化列名
         df = self._standardize_columns(df, indicator_id)
+
+        # 时间语义与来源/名称
+        df = self._fill_temporal_columns(df)
+        df = self._fill_indicator_names(df)
+        df = self._fill_source_id(df, source_id)
 
         # 加载指标信息
         self._load_indicator_info(df)
@@ -119,6 +132,11 @@ class MacroLoader(BaseLoader):
         column_mapping = {
             'date': 'trade_date',
             '日期': 'trade_date',
+            'period_date': 'period_date',
+            '统计期': 'period_date',
+            'publish_date': 'publish_date',
+            '发布日期': 'publish_date',
+            'publish_date_quality': 'publish_date_quality',
             'indicator': 'indicator_id',
             '指标': 'indicator_id',
             'indicator_name': 'indicator_name',
@@ -126,6 +144,8 @@ class MacroLoader(BaseLoader):
             'value': 'value',
             '数值': 'value',
             'val': 'value',
+            'source_id': 'source_id',
+            '来源': 'source_id',
         }
 
         # 重命名列
@@ -143,6 +163,9 @@ class MacroLoader(BaseLoader):
 
         # 转换日期格式
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+        for col in ('period_date', 'publish_date'):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col]).dt.date
 
         # 添加默认值
         if 'value_type' not in df.columns:
@@ -150,6 +173,98 @@ class MacroLoader(BaseLoader):
         if 'data_quality' not in df.columns:
             df['data_quality'] = 100
 
+        return df
+
+    def _fill_temporal_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """补齐 period_date / publish_date / publish_date_quality"""
+        if 'period_date' not in df.columns:
+            df['period_date'] = [
+                resolve_period_date(ind, raw)
+                for ind, raw in zip(df['indicator_id'], df['trade_date'])
+            ]
+        else:
+            missing = df['period_date'].isna()
+            if missing.any():
+                df.loc[missing, 'period_date'] = [
+                    resolve_period_date(ind, raw)
+                    for ind, raw in zip(
+                        df.loc[missing, 'indicator_id'],
+                        df.loc[missing, 'trade_date'],
+                    )
+                ]
+
+        resolved = [
+            resolve_publish_info(ind, raw, period)
+            for ind, raw, period in zip(
+                df['indicator_id'], df['trade_date'], df['period_date']
+            )
+        ]
+        if 'publish_date' not in df.columns:
+            df['publish_date'] = [item[0] for item in resolved]
+        else:
+            missing = df['publish_date'].isna()
+            if missing.any():
+                df.loc[missing, 'publish_date'] = [
+                    item[0] for item, miss in zip(resolved, missing) if miss
+                ]
+
+        if 'publish_date_quality' not in df.columns:
+            df['publish_date_quality'] = [item[1] for item in resolved]
+        else:
+            missing = df['publish_date_quality'].isna()
+            if missing.any():
+                df.loc[missing, 'publish_date_quality'] = [
+                    item[1] for item, miss in zip(resolved, missing) if miss
+                ]
+
+        return df
+
+    def _fill_indicator_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """用 macro_indicators 补齐真实指标名称"""
+        if 'indicator_name' not in df.columns:
+            df['indicator_name'] = None
+
+        ids = [str(item) for item in df['indicator_id'].dropna().unique()]
+        if not ids:
+            df['indicator_name'] = df['indicator_id']
+            return df
+
+        params: dict[str, object] = {}
+        placeholders = bind_in(params, 'ind', ids)
+        names: dict[str, str] = {}
+        try:
+            with self.conn as conn:
+                rows = conn.execute(
+                    "SELECT indicator_id, indicator_name FROM macro_indicators "
+                    f"WHERE indicator_id IN ({placeholders})",
+                    params,
+                ).fetchdf()
+            names = {
+                str(row['indicator_id']): row['indicator_name']
+                for _, row in rows.iterrows()
+                if pd.notna(row['indicator_name'])
+            }
+        except Exception as e:
+            logger.warning(f"指标名称查询失败: {e}")
+
+        mapped = df['indicator_id'].astype(str).map(names)
+        df['indicator_name'] = df['indicator_name'].where(
+            df['indicator_name'].notna(), mapped
+        )
+        df['indicator_name'] = df['indicator_name'].fillna(
+            df['indicator_id'].astype(str)
+        )
+        return df
+
+    def _fill_source_id(self, df: pd.DataFrame,
+                        source_id: Optional[str]) -> pd.DataFrame:
+        """列值优先，缺失时回退 load(..., source_id=...)"""
+        if 'source_id' not in df.columns:
+            df['source_id'] = source_id
+        elif source_id is not None:
+            df['source_id'] = df['source_id'].where(
+                df['source_id'].notna(), source_id
+            )
         return df
 
     def _load_indicator_info(self, df: pd.DataFrame) -> None:
@@ -187,24 +302,60 @@ class MacroLoader(BaseLoader):
             插入记录数
         """
         # 确保所有需要的列都存在
-        required_cols = ['trade_date', 'indicator_id', 'value', 'value_type', 'data_quality']
+        required_cols = [
+            'trade_date', 'period_date', 'publish_date',
+            'publish_date_quality', 'loaded_at', 'indicator_id',
+            'indicator_name', 'value', 'value_type', 'data_quality',
+            'source_id', 'update_time',
+        ]
         for col in required_cols:
             if col not in df.columns:
                 if col == 'indicator_id':
                     raise ValueError("缺少 indicator_id 列")
-                df[col] = None
+                if col in ('loaded_at', 'update_time'):
+                    df[col] = pd.Timestamp.now()
+                else:
+                    df[col] = None
+
+        df['indicator_name'] = df['indicator_name'].fillna(
+            df['indicator_id'].astype(str)
+        )
 
         # 确保列顺序与表一致
-        df = df[['trade_date', 'indicator_id', 'value', 'value_type', 'data_quality']]
+        df = df[required_cols]
 
-        # 使用 COPY 批量导入
+        # 批量导入；ON CONFLICT 保留已存在的 publish_date/quality
         try:
             with self.conn as conn:
                 conn.register('macro_temp', df)
                 conn.execute("""
-                    INSERT OR REPLACE INTO macro_data (trade_date, indicator_id, indicator_name, value, value_type, data_quality, source_id, update_time)
-                    SELECT trade_date, indicator_id, indicator_id as indicator_name, value, value_type, data_quality, NULL, CURRENT_TIMESTAMP
+                    INSERT INTO macro_data (
+                        trade_date, period_date, publish_date,
+                        publish_date_quality, loaded_at, indicator_id,
+                        indicator_name, value, value_type, data_quality,
+                        source_id, update_time
+                    )
+                    SELECT
+                        trade_date, period_date, publish_date,
+                        publish_date_quality, loaded_at, indicator_id,
+                        indicator_name, value, value_type, data_quality,
+                        source_id, update_time
                     FROM macro_temp
+                    ON CONFLICT (trade_date, indicator_id, value_type) DO UPDATE SET
+                        period_date = COALESCE(EXCLUDED.period_date, macro_data.period_date),
+                        publish_date = COALESCE(EXCLUDED.publish_date, macro_data.publish_date),
+                        publish_date_quality = CASE
+                            WHEN COALESCE(macro_data.publish_date_quality, 'unknown') = 'unknown'
+                                 AND EXCLUDED.publish_date_quality IS NOT NULL
+                            THEN EXCLUDED.publish_date_quality
+                            ELSE macro_data.publish_date_quality
+                        END,
+                        indicator_name = EXCLUDED.indicator_name,
+                        value = EXCLUDED.value,
+                        data_quality = EXCLUDED.data_quality,
+                        source_id = COALESCE(EXCLUDED.source_id, macro_data.source_id),
+                        loaded_at = EXCLUDED.loaded_at,
+                        update_time = EXCLUDED.update_time
                 """)
                 conn.unregister('macro_temp')
             return len(df)

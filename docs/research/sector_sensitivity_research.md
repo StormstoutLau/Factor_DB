@@ -69,7 +69,8 @@ P4 已将申万一级行业日收益率写入 `alternative_data`（`data_type='i
 4. **不引入滚动窗口与多因子**
    - 当前接口一次只接收一个 `macro_indicator`，多因子/VAR 需要重构签名与数据路径；滚动 beta 需要窗口参数与更多测试，均超出“补齐 TODO”的范围。
 5. **定位为同期关联，不做可交易信号**
-   - `macro_data.trade_date` 是统计期而非发布日，且 `macro_data` / `alternative_data` 均无 `loaded_at` PIT 语义；结果只能表述为“同期暴露”，不能作为发布时点可得的预测信号。
+   - `macro_data.trade_date` 是原始采集日期（语义混合），且当时 `macro_data` / `alternative_data` 均无 PIT 语义；结果只能表述为“同期暴露”，不能作为发布时点可得的预测信号。
+   - **P8-1 修正（ADR-0012）**：`trade_date` 混合语义表述已纠正；宏观新增 `period_date`/`publish_date`/`loaded_at`，敏感度默认按 `period_date` 对齐，并支持 `as_of` 按 `publish_date` 截断。
 6. **最小样本 12 个月**
    - 月度回归在 12 个观测以下自由度不足、结论不稳；默认 `min_obs=12`，不足的行业跳过并记日志。
 
@@ -96,7 +97,7 @@ P4 已将申万一级行业日收益率写入 `alternative_data`（`data_type='i
 
 | 风险 | 影响 | 缓解 |
 |------|------|------|
-| 宏观 `trade_date` 为统计期而非发布日 | 存在同期/前视歧义 | 文档明确“同期关联”；后续如需 PIT 需给宏观表加 `loaded_at` |
+| 宏观 `trade_date` 语义混合（发布日/统计期起点/季末/日频） | 存在同期/前视歧义 | ~~文档明确“同期关联”；后续如需 PIT 需给宏观表加 `loaded_at`~~ → P8-1 已新增 `period_date`/`publish_date`/`loaded_at` 并支持 `as_of`（ADR-0012） |
 | 宏观月度值与行业月收益的月末边界 | 首尾月份可能不完整 | 日期过滤按自然日；文档说明边界月 |
 | 行业指数为价格指数（不含分红） | 长期收益偏低 | 结论表述为“价格收益敏感度” |
 | 行业分类版本漂移（2014/2021 申万） | 长周期 beta 可比性下降 | 输出 `start_date/end_date/n_obs`；建议分段回归 |

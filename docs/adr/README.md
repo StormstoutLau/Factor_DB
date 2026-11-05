@@ -17,6 +17,7 @@
 | [0009](0009-csmar-history-only.md) | CSMAR 批量因子仅写入长表 | 已接受 | 2026-10 |
 | [0010](0010-cache-invalidation-singleton-lifecycle.md) | 查询缓存写后失效与连接单例生命周期 | 已接受 | 2026-10 |
 | [0011](0011-ic-query-path-fix.md) | IC 计算路径修复（数据源与前瞻收益实现） | 已接受 | 2026-10 |
+| [0012](0012-macro-temporal-pit.md) | 宏观数据双日期模型与 PIT 语义 | 已接受 | 2026-11 |
 
 ## 决策记录格式
 

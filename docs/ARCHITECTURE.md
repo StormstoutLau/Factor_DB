@@ -73,7 +73,7 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（371 测试）
+├── tests/                   # 测试套件（397 测试）
 ├── benchmarks/              # 基准测试
 ├── cli.py                   # CLI（12 子命令，含 collect / ic / ic-decay / quantile / validate）
 └── docs/                    # 文档（含 spec/adr）
@@ -142,7 +142,25 @@ level1_parquet/trade_date=YYYY-MM-DD/data.parquet
 查询用 `read_parquet('level1_parquet/**/*.parquet', hive_partitioning=true)`。
 
 ### 3.4 扩展表
-`factor_info`（5,439+ 因子目录，Phase 3 已启用）为实际使用；其余 `data_categories`、`data_sources`、`data_dictionary`、`macro_data`、`macro_indicators`、`news_sentiment`、`report_sentiment`、`alternative_data`、`alternative_types` 仍为预留空表。
+`factor_info`（5,439+ 因子目录，Phase 3 已启用）、`macro_data`（4,358 行）、`macro_indicators`（12 指标）、`alternative_data`（行业收益 14.4 万行）为实际使用；其余 `data_categories`、`data_sources`、`data_dictionary`、`news_sentiment`、`report_sentiment`、`alternative_types` 仍为预留空表。
+
+### 3.5 宏观数据表（双日期 + PIT，ADR-0012）
+
+**`macro_data`** — 宏观经济数据（主键不变）
+```
+trade_date DATE,            -- 原始采集日期（发布日 / 统计期起点 / 季末 / 日频观测）
+period_date DATE,           -- 统计期（月末 / 季末），由指标规则推导
+publish_date DATE,          -- 首次可得日；历史不可考为 NULL
+publish_date_quality VARCHAR,  -- exact / estimated / unknown
+loaded_at TIMESTAMP,        -- 入库时间，PIT 兜底
+indicator_id VARCHAR, indicator_name VARCHAR, value DOUBLE,
+value_type VARCHAR, data_quality INTEGER, source_id VARCHAR, update_time TIMESTAMP
+PRIMARY KEY (trade_date, indicator_id, value_type)
+```
+- 同一统计期允许多行（原始 `trade_date` 不同）；查询按 `period_date` 去重取最新。
+- `as_of` 过滤：`publish_date <= as_of`；`publish_date IS NULL` 时回退 `loaded_at <= as_of`。
+- 索引：`idx_macro_date`、`idx_macro_indicator`、`idx_macro_date_indicator`、`idx_macro_period_date`、`idx_macro_publish_date`。
+- 12 个 AKShare 指标的日期规则集中在 `core/macro_temporal.py`（`MACRO_TEMPORAL_RULES`）。
 
 ---
 
@@ -183,10 +201,13 @@ level1_parquet/trade_date=YYYY-MM-DD/data.parquet
 `factor-db collect --source sw_industry` 调用 `SWIndustryCollector`：`sw_index_{first|second|third}_info` 取行业目录，`index_hist_sw`（symbol 为 6 位代码，须剥离 `.SI`）逐指数拉全量日线，按 `收盘.pct_change()` 计算日收益率（首行无前收盘丢弃），写入 `alternative_data`（`data_type='industry_return'`、`entity_type='industry'`、`entity_id` 为行业代码、`data_subtype` 为 `first/second/third`）。`data_id` 含 `data_subtype`，`ON CONFLICT DO NOTHING` 保证幂等（上游历史修订不会被覆盖）。默认仅一级 31 个行业；实测 2026-11-02 入库 137,575 行 / 30 个行业，耗时 602.4 s。
 
 ### 行业宏观敏感度（P5）
-`MacroFactorLink.get_sector_sensitivity` 读取 `macro_data` 与 `alternative_data`：行业日收益按月复利，宏观按自然月取最后观测并按指标类型做变换（默认率型指标 `diff`、水平型指标 `pct_change`，也可显式指定 `pct_change` / `diff` / `level`），逐行业做单因子 OLS `r_i = α + β·Δm + ε`，输出 `beta` / `correlation` / `t_stat` / `r_squared` / `n_obs` / 区间，按 beta 绝对值排序。默认一级行业、`min_obs=12`；宏观/行业无数据时返回同列空表。`macro_data.trade_date` 为统计期而非发布日，结果定位为同期关联（非 PIT、非预测信号）。临时库实测 3 个行业、CPI 月度变化 179 期，beta 全部有限。
+`MacroFactorLink.get_sector_sensitivity` 读取 `macro_data` 与 `alternative_data`：行业日收益按月复利，宏观按统计期（`period_date`，P8-1 前为原始 `trade_date`）取最后观测并按指标类型做变换（默认率型指标 `diff`、水平型指标 `pct_change`，也可显式指定 `pct_change` / `diff` / `level`），逐行业做单因子 OLS `r_i = α + β·Δm + ε`，输出 `beta` / `correlation` / `t_stat` / `r_squared` / `n_obs` / 区间，按 beta 绝对值排序。默认一级行业、`min_obs=12`；宏观/行业无数据时返回同列空表。结果定位为同期关联；P8-1 起 `as_of` 可按 `publish_date` 做 PIT 截断。临时库实测 3 个行业、CPI 月度变化 179 期，beta 全部有限。
 
 ### 率型宏观指标默认变换（P7）
-`get_sector_sensitivity` 的 `transform` 默认改为 `None`：`RATE_TYPE_INDICATORS`（CPI_MONTHLY / CPI_YEARLY / PPI_YEARLY / M2_YEARLY / GDP_YEARLY / INTEREST_RATE）使用 `diff`（百分点变化），其余水平型指标使用 `pct_change`；显式 `transform` 优先。修复对率型指标再取百分比变化导致的零基数 ±Inf、负基数符号反转与 beta 压缩。生产 CPI 默认 beta 约 0.023/百分点、`n_obs=45~186`；显式 `pct_change` 仍可复现旧口径（beta ≈0.0076、`n_obs=40~172`）。
+`get_sector_sensitivity` 的 `transform` 默认改为 `None`：`RATE_TYPE_INDICATORS`（CPI_MONTHLY / CPI_YEARLY / PPI_YEARLY / M2_YEARLY / GDP_YEARLY / INTEREST_RATE）使用 `diff`（百分点变化），其余水平型指标使用 `pct_change`；显式 `transform` 优先。修复对率型指标再取百分比变化导致的零基数 ±Inf、负基数符号反转与 beta 压缩。P7 验收锚点（发布月对齐口径）：生产 CPI 默认 beta 约 0.023/百分点、`n_obs=45~186`；显式 `pct_change` beta ≈0.0076、`n_obs=40~172`。P8-1 改为统计期对齐后，beta 数值已变化，以 §21 复跑结果为准。
+
+### 宏观数据时间语义与 PIT（P8-1）
+`macro_data` 从「单日期混合语义」升级为双日期模型（ADR-0012）：`trade_date` 保留原始采集日期，新增 `period_date`（统计期）、`publish_date`（首次可得日）、`publish_date_quality`（`exact`/`estimated`/`unknown`）与 `loaded_at`（入库时间）。规则表 `core/macro_temporal.py` 覆盖 12 个 AKShare 指标：CPI/PPI/M2/GDP 同比等发布日型按“前一月末/季末”回推统计期；PMI/PPI 环比/M2 环比/外储/进出口等月首型统一到月末；`GDP_QUARTERLY` 保持季末；`INTEREST_RATE` 日频观测按月末归档。`MacroLoader` 自动补齐缺失时间列并保留已写入的 `publish_date`；`MacroQuery` 以 `COALESCE(period_date, trade_date)` 输出统计期并按 `as_of` 过滤（`publish_date` 缺失时回退 `loaded_at`），同期多行取最新。生产库迁移 4,358 行（`period_date` 非空 100%，`exact` 2,295 / `estimated` 1,233 / `unknown` 830），CPI `2025-08-09` → period `2025-07-31`、publish `2025-08-09`。
 
 ### 宏观采集归一化（P6）
 `AKShareMacroCollector.transform_data` 用正则解析中文期间：`YYYY年MM月份` → 当月 1 日、`YYYY年第N[-M]季度` → 季末；五列发布报告优先取 `今值`（不再取 `前值`）；多列统计表按 `VALUE_COLUMNS` 映射主数据列（GDP 绝对值 / PPI 当月 / PMI 制造业指数 / M2 数量 / 外储数值 / 出口金额），未知指标回退首个匹配列。生产库重采 12 个指标，实际入库 4,358 行（63 行 `今值` 为空被丢弃）。

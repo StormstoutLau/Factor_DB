@@ -485,7 +485,7 @@
 - [x] `macro_data` 主键 `(trade_date, indicator_id, value_type)`、`alternative_data` 唯一键 `(trade_date, data_type, data_subtype, entity_type, entity_id)` 与 schema 一致
 - [x] 生产库 `macro_data` / `alternative_data` 均为 0 行（2026-11-02 只读实测）
 - [x] 依赖无 `scipy`，因此不输出 p 值（`pyproject.toml` 核对）
-- [x] 行业收益为价格指数日收益，`macro_data.trade_date` 为统计期而非发布日
+- [x] 行业收益为价格指数日收益，`macro_data.trade_date` 为原始采集日期（P8-1 修正：原记录“为统计期”有误；统计期见 `period_date`）
 
 ### 设计 / 实现
 - [x] 签名前 4 参数不变，追加 `level='first'` / `transform='pct_change'` / `min_obs=12`（均有默认值）
@@ -618,4 +618,54 @@
 - [x] 调研 / 设计 / 实施三文档术语、映射、签名一致
 - [x] DEVLOG 新增条目；ARCHITECTURE 默认口径说明；测试数 367 → 371
 - [x] README / README_zh 测试数 367 → 371；README 测试表 `test_macro_factor_link.py` 11 → 15
+
+---
+
+## 二十一、宏观数据时间语义与 PIT 对齐（P8-1）（2026-11-04）
+
+来源：[调研](../research/macro_temporal_semantics_pit_research.md) / [设计](../design/macro_temporal_semantics_pit_design.md) / [实施](../implementation/macro_temporal_semantics_pit_implementation.md)
+
+> 状态：**已验收**（2026-11-05），全部项通过。
+
+### 事实与设计
+- [x] 12 指标日期语义审计表与生产库一致（CPI 354/2011 前月首、PMI 226 月首、GDP_QUARTERLY 83 季末）
+- [x] NBS 发布日程事实成立：CPI/PPI 每月 9~14 日发布、PMI 月末发布、GDP 季后 15~19 天
+- [x] 五列指标（CPI/CPI_YEARLY/PPI_YEARLY/M2_YEARLY/GDP_YEARLY）止于 2025-07/08
+- [x] M2_YEARLY 7 组同月多行、`2020-02-17=0.0` 异常已记录
+- [x] 设计决策 D1-D9 均可回溯调研；未核实发布日已标注 `estimated`
+
+### Schema / 迁移
+- [x] `macro_data` 新增 `period_date`/`publish_date`/`publish_date_quality`/`loaded_at`，主键不变
+- [x] 新增 `idx_macro_period_date`、`idx_macro_publish_date`
+- [x] `migrate_macro_data_temporal()` 先备份、列存在性幂等、单事务回填
+- [x] 迁移后 4,358 行 `period_date` 非空 100%；12 指标 `source_id='akshare_macro'`
+- [x] `indicator_name` 从 `macro_indicators` 回填；缺失回退 `indicator_id`
+- [x] `M2_YEARLY` 值为 0.0 的行 `data_quality=50` 且保留原值
+- [x] 迁移连跑两次行数与关键值不变
+
+### Loader / Query / Analytics
+- [x] `MacroLoader.load(..., *, source_id=None)` 可自动推导 period/publish/quality
+- [x] 重载时 `publish_date` 用 `COALESCE` 保留旧值，禁止 `INSERT OR REPLACE` 覆盖
+- [x] `loaded_at` 显式赋 `CURRENT_TIMESTAMP`，不依赖 DDL 默认值
+- [x] `get_macro_data`/`get_macro_matrix` 支持 `as_of`；`trade_date` 输出为 `COALESCE(period_date, trade_date)`
+- [x] `as_of` 逻辑：publish 优先、NULL 回退 loaded_at；同期多行取最新
+- [x] 旧行（仅 `trade_date`）仍可查询；`get_indicator_stats`/`get_latest_values`/`get_macro_by_date_range`/`calculate_yoy` 改用 period
+- [x] `get_sector_sensitivity(..., as_of=None)` 按 `period_date` 对齐，输出 10 列不变
+
+### TDD 与回归
+- [x] 红灯：规则 8 passed；其余 **18 failed**（迁移 5 + Loader 5 + Query 6 + 敏感度 2），定向 23 passed / 18 failed
+- [x] 绿灯：`tests/test_macro_temporal.py` **24 passed**；`tests/test_macro_factor_link.py` **17 passed**
+- [x] 全量：**397 passed**（371 + 26）；`ruff check .` All checks passed
+
+### 生产迁移与复跑
+- [x] 生产库迁移 4,358 行；CPI `2025-08-09`→period `2025-07-31`/publish `2025-08-09`/exact
+- [x] PMI `2026-10-01`→period `2026-10-31`/estimated；GDP_QUARTERLY `2026-09-30`→publish≈`2026-10-17`
+- [x] PIT：`as_of=2025-08-05` 排除 CPI 2025-07 期；`2025-08-15` 包含
+- [x] P7 CPI 敏感度按 period 重跑，记录新 beta 范围与 `n_obs`，与旧值对比
+- [x] 迁移备份表已确认可回滚，验收后按需清理
+
+### 文档同步
+- [x] P8-0：`macro_factor_link.py` Notes、P5/P7 设计/实施文档、DEVLOG 的“trade_date=统计期”表述已修正
+- [x] DEVLOG 新增 P8-1 条目；ARCHITECTURE/CODE_WIKI 补充字段与 PIT 语义
+- [x] README/README_zh 测试数 371 → 397；README 测试表新增 `test_macro_temporal.py` 24
 

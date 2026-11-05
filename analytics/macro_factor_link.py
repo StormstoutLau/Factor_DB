@@ -211,6 +211,7 @@ class MacroFactorLink:
                               sectors: Optional[List[str]] = None,
                               start_date: Optional[date] = None,
                               end_date: Optional[date] = None,
+                              as_of: Optional[date] = None,
                               level: Optional[str] = 'first',
                               transform: Optional[str] = None,
                               min_obs: int = 12) -> pd.DataFrame:
@@ -228,6 +229,7 @@ class MacroFactorLink:
             sectors: 行业代码列表（None 表示全部）
             start_date: 开始日期
             end_date: 结束日期
+            as_of: PIT 截止日期（只使用该日期前已发布的宏观数据）
             level: 行业级别：first/second/third；None 表示不限制
             transform: 宏观变换：pct_change/diff/level；None 表示按指标类型
                 自动选择（率型指标用 diff，水平型指标用 pct_change）
@@ -238,8 +240,9 @@ class MacroFactorLink:
             无数据或宏观无变化时返回同列空表。
 
         Notes:
-            ``macro_data.trade_date`` 为统计期而非发布日，且两张表均无
-            ``loaded_at``，因此结果是同期关联，不是 PIT 信号或预测。
+            ``macro_data.trade_date`` 为统计期（ADR-0012），与行业月收益按
+            统计期对齐；``as_of`` 通过 ``publish_date`` 过滤，可避免使用
+            当时尚未发布的数据。
         """
         if level not in {None, 'first', 'second', 'third'}:
             raise ValueError(f"未知的行业级别: {level}")
@@ -257,7 +260,7 @@ class MacroFactorLink:
 
         # 1) 宏观月度序列与变换
         macro_df = self.macro_query.get_macro_data(
-            [macro_indicator], start_date, end_date
+            [macro_indicator], start_date, end_date, as_of=as_of
         )
         if macro_df.empty:
             logger.warning(f"宏观数据为空: {macro_indicator}")

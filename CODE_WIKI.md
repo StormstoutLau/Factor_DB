@@ -133,8 +133,8 @@ DuckDBConnection
 
 **SchemaManager 核心属性**：
 
-- `TABLES`：类变量，字典类型，定义了全部 14 张表的 DDL 语句
-- `INDEXES`：类变量，字典类型，定义了全部 20 个索引的创建语句
+- `TABLES`：类变量，字典类型，定义了全部 15 张表的 DDL 语句
+- `INDEXES`：类变量，字典类型，定义了全部 24 个索引的创建语句
 
 ```
 SchemaManager
@@ -146,6 +146,7 @@ SchemaManager
 ├── drop_table(table_name) -> bool
 ├── table_exists(table_name) -> bool
 ├── get_table_stats(table_name) -> Optional[dict]
+├── migrate_macro_data_temporal() -> dict   # 备份 + 回填宏观时间列（ADR-0012）
 └── init_database() -> bool         # 一键初始化：创建所有表 + 索引
 ```
 
@@ -174,6 +175,21 @@ MetadataManager
 #### 3.1.4 schema_extension.py — 扩展表定义
 
 提供 `TABLES_EXTENSION` 和 `INDEXES_EXTENSION` 字典，以及 `merge_with_extension()` 函数用于将扩展表定义与基础表定义合并。当前扩展表已直接集成到 `SchemaManager.TABLES` 中，此文件保留作为独立扩展定义的参考。
+
+#### 3.1.5 macro_temporal.py — 宏观时间语义规则（P8-1）
+
+定义 12 个 AKShare 宏观指标的日期语义与发布日规则（ADR-0012），供 Schema 迁移、Loader 与 Query 复用：
+
+```
+MacroTemporalRule(semantics, frequency, period_offset, publish_rule, publish_date_quality)
+resolve_period_date(indicator_id, raw_date, publish_date=None) -> date
+estimate_publish_date(indicator_id, period_date) -> Optional[date]
+is_legacy_release_series(indicator_id, raw_date) -> bool
+resolve_publish_info(indicator_id, raw_date, period_date=None) -> (publish_date, quality)
+```
+
+- `semantics`：`release_date` / `period_start` / `period_end` / `observation`
+- `publish_date_quality`：`exact`（原始日期即发布日）/ `estimated`（按发布日程推算）/ `unknown`（历史不可考）
 
 ---
 
@@ -275,17 +291,22 @@ Level1Loader
 
 **支持的文件格式**：`.csv`、`.xls/.xlsx`、`.pkl`、`.parquet`
 
-**列名自动标准化**：支持中英文列名映射（如 `日期` → `trade_date`，`数值` → `value`）
+**列名自动标准化**：支持中英文列名映射（如 `日期` → `trade_date`，`数值` → `value`，`统计期` → `period_date`，`发布日期` → `publish_date`）
+
+**时间语义（P8-1 / ADR-0012）**：缺失 `period_date` 时按 `MACRO_TEMPORAL_RULES` 推导；缺失 `publish_date`/`publish_date_quality` 时按 `resolve_publish_info` 推导；显式列优先。
 
 ```
 MacroLoader
-├── load(data_path, indicator_id) -> int  # 支持 DataFrame 或文件路径
+├── load(data_path, indicator_id=None, *, source_id=None) -> int
 ├── validate(data) -> bool
 ├── load_indicator_definitions(indicators_df) -> int
 ├── _read_file(file_path) -> DataFrame
 ├── _standardize_columns(df, indicator_id) -> DataFrame
+├── _fill_temporal_columns(df) -> DataFrame   # period/publish/quality
+├── _fill_indicator_names(df) -> DataFrame    # 回查 macro_indicators
+├── _fill_source_id(df, source_id) -> DataFrame
 ├── _load_indicator_info(df) -> None
-└── _insert_macro_data(df) -> int
+└── _insert_macro_data(df) -> int             # ON CONFLICT 保留 publish_date
 ```
 
 #### 3.2.5 news_loader.py — 舆情数据加载器
@@ -438,15 +459,17 @@ StockScreener
 
 ```
 MacroQuery
-├── get_macro_data(indicator_ids, start_date, end_date, value_type) -> DataFrame
-├── get_macro_matrix(indicator_ids, start_date, end_date, value_type) -> DataFrame
+├── get_macro_data(indicator_ids, start_date, end_date, value_type, as_of) -> DataFrame
+├── get_macro_matrix(indicator_ids, start_date, end_date, value_type, as_of) -> DataFrame
 ├── get_indicators(category) -> DataFrame
-├── get_indicator_stats(indicator_id, start_date, end_date) -> dict
-├── get_latest_values(indicator_ids) -> DataFrame
-├── get_macro_by_date_range(start_date, end_date, categories) -> DataFrame
-├── calculate_yoy(indicator_id, periods) -> DataFrame
-└── identify_macro_regime(start_date, end_date, n_regimes) -> DataFrame
+├── get_indicator_stats(indicator_id, start_date, end_date, as_of) -> dict
+├── get_latest_values(indicator_ids, as_of) -> DataFrame
+├── get_macro_by_date_range(start_date, end_date, categories, as_of) -> DataFrame
+├── calculate_yoy(indicator_id, periods, as_of) -> DataFrame
+└── identify_macro_regime(start_date, end_date, n_regimes, as_of) -> DataFrame
 ```
+
+**时间语义（P8-1 / ADR-0012）**：输出 `trade_date` 为统计期 `COALESCE(period_date, trade_date)`，并附带 `period_date`/`publish_date`/`publish_date_quality`；`start_date`/`end_date` 按统计期过滤；`as_of` 只保留 `publish_date <= as_of` 的行（`publish_date` 为 NULL 时回退 `loaded_at`）；同一统计期多行按 `publish_date DESC NULLS LAST, loaded_at DESC` 取最新。
 
 **宏观环境分类逻辑**（基于 PMI 和 CPI）：
 
@@ -746,7 +769,7 @@ DataValidator
 
 | 表名 | 用途 | 主键 | 关键索引 |
 |------|------|------|---------|
-| `macro_data` | 宏观经济数据 | (trade_date, indicator_id, value_type) | idx_macro_date, idx_macro_indicator, idx_macro_date_indicator |
+| `macro_data` | 宏观经济数据（含 `period_date`/`publish_date`/`publish_date_quality`/`loaded_at`） | (trade_date, indicator_id, value_type) | idx_macro_date, idx_macro_indicator, idx_macro_date_indicator, idx_macro_period_date, idx_macro_publish_date |
 | `macro_indicators` | 宏观指标信息 | indicator_id | idx_macro_indicator_category |
 
 ### 4.4 舆情数据表
@@ -1051,6 +1074,7 @@ python -m benchmarks.benchmark
 | test_query.py | query/price_query, query/factor_query, query/screen | TestPriceQuery, TestFactorQuery, TestStockScreener |
 | test_adapters.py | adapters/pandas_adapter, adapters/engine_adapter | TestPandasAdapter, TestFactorTradingAdapter, TestDataLoaderV3Adapter |
 | test_extension.py | core/metadata_manager, loaders/macro_loader, loaders/news_loader, loaders/alternative_loader, query/macro_query, query/sentiment_query, query/alternative_query, analytics/* | TestMetadataManager, TestMacroData, TestSentimentData, TestAlternativeData, TestAnalytics |
+| test_macro_temporal.py | core/macro_temporal, core/schema, loaders/macro_loader, query/macro_query | TestMacroTemporalRules, TestMacroTemporalMigration, TestMacroLoaderTemporal, TestMacroQueryPIT |
 
 ### 测试要点
 
@@ -1061,7 +1085,7 @@ python -m benchmarks.benchmark
 - **条件选股**：条件筛选、分位数选股
 - **适配器**：宽长格式转换、多级索引、技术指标、复权价格、DataLoaderV3 格式
 - **元数据管理**：分类/数据源/字段的 CRUD、默认元数据初始化
-- **宏观数据**：查询、矩阵、统计、最新值、加载器
+- **宏观数据**：查询、矩阵、统计、最新值、加载器；P8-1 额外覆盖时间语义规则、迁移幂等与 `as_of` PIT
 - **舆情数据**：股票舆情、情感聚合、情感选股、加载器
 - **另类数据**：数据查询、时间序列、最新数据、加载器
 - **分析模块**：宏观-因子关联、宏观因子构建、多源综合评分

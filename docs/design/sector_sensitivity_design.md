@@ -49,8 +49,8 @@ get_sector_sensitivity(macro_indicator, sectors?, start, end, level, transform, 
 
 ### 2.2 对齐与因果语义
 
-- 合并键为自然月，属于**同期关联**；`macro_data.trade_date` 是统计期而非发布日，不能当作发布时点可得的信号（调研 §4.5）。
-- 不做前视填充、不做 PIT 回溯。
+- 合并键为自然月，属于**同期关联**；`macro_data.trade_date` 是原始采集日期（语义混合：发布日/统计期起点/季末/日频观测），不能当作发布时点可得的信号（调研 §4.5）。
+- ~~不做前视填充、不做 PIT 回溯。~~（P8-1 更新：默认按 `period_date` 统计期对齐；`as_of` 可按 `publish_date` 做 PIT 截断，ADR-0012）
 
 ---
 

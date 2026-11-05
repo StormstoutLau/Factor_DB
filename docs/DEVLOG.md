@@ -7,6 +7,19 @@
 
 ## 2026-10（最近）
 
+### 宏观数据时间语义与 PIT 对齐 P8-1（2026-11-05）
+- **背景**: `macro_data.trade_date` 长期混合“发布日/统计期起点/季末/日频观测”四种语义，导致 CPI 月份错位、PMI/PPI/M2/外储/进出口统计期前视 30~40 天（[P8-0 分析](research/post_p7_backlog_analysis.md)、[调研](research/macro_temporal_semantics_pit_research.md)）
+- **决策**（[ADR-0012](adr/0012-macro-temporal-pit.md)）: 保留 `trade_date` 为原始日期；新增 `period_date`（统计期）、`publish_date`（首次可得日）、`publish_date_quality`（exact/estimated/unknown）、`loaded_at`；主键不变
+- **规则**: 新增 `core/macro_temporal.py` 覆盖 12 指标：发布日型按前一月末/季末回推、月首型统一月末、`GDP_QUARTERLY` 季末、`INTEREST_RATE` 日频按月末；未知指标保留原日期
+- **Loader**: `load(..., *, source_id=None)` 自动推导 period/publish/quality，回填真实 `indicator_name`；`ON CONFLICT DO UPDATE` + `COALESCE` 保留已写 `publish_date`
+- **Query**: `get_macro_data`/`get_macro_matrix` 等 7 方法支持 `as_of`；`trade_date` 输出为 `COALESCE(period_date, trade_date)`；同期多行按 publish/loaded_at 取最新；legacy 行兜底
+- **Analytics**: `get_sector_sensitivity(..., as_of=None)` 按 `period_date` 对齐；P7 的率型 `diff` 默认保持不变
+- **生产迁移**: 4,358 行全部 `period_date` 非空；`exact` 2,295 / `estimated` 1,233 / `unknown` 830；CPI `2025-08-09`→period `2025-07-31`/publish `2025-08-09`/exact；PMI `2026-10-01`→period `2026-10-31`/estimated；GDP_QUARTERLY `2026-09-30`→publish `2026-10-17`；M2 `2020-02-17` 0.0 → `data_quality=50`；备份表 `macro_data_backup_20261105`
+- **PIT 验证**: `as_of=2025-08-05` 最高 CPI 期为 `2025-06-30`；`as_of=2025-08-15` 含 `2025-07-31`
+- **P7 复跑（统计期对齐）**: 默认 `diff` 31 行、`n_obs=44~306`、beta `-0.0307~0.0016`（中位 `-0.0079`）、区间 2000-01 ~ 2025-07-31，无 NaN；显式 `pct_change` 31 行、`n_obs=39~286`、beta `-0.0097~0.0038`。与 P7 旧锚点（`n_obs=45~186`、beta `-0.0113~0.0232`）差异主因：CPI 由发布月改为统计期后 x 前移一个月
+- **TDD**: 新增 26 用例（`tests/test_macro_temporal.py` 24 + 敏感度 2）；红灯 18 failed → 绿灯全量 **397 passed**，`ruff` 零告警
+- **文档**: [调研](research/macro_temporal_semantics_pit_research.md) / [设计](design/macro_temporal_semantics_pit_design.md) / [实施](implementation/macro_temporal_semantics_pit_implementation.md)；ARCHITECTURE/CODE_WIKI 补充双日期字段与 PIT 语义
+
 ### CPI_MONTHLY beta 修复 P7：率型指标默认 diff（2026-11-04）
 - **背景**: P6 重采后 CPI_MONTHLY 入库值为环比（%），P5 默认再取 `pct_change`：21 个零值产生 ±Inf 被丢弃（约 5.9% 观测）、137 次负基数转移符号反转、x 达 ±800%，beta 仅 ~0.007 且方向不可解释（[调研](research/cpi_monthly_beta_finiteness_research.md)）
 - **修复**: 新增 `RATE_TYPE_INDICATORS`（CPI_MONTHLY/CPI_YEARLY/PPI_YEARLY/M2_YEARLY/GDP_YEARLY/INTEREST_RATE）；`transform` 默认改为 `None`，率型 → `diff`、水平型 → `pct_change`，显式值优先
