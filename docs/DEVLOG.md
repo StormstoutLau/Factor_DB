@@ -14,7 +14,7 @@
 - **Loader**: `load(..., *, source_id=None)` 自动推导 period/publish/quality，回填真实 `indicator_name`；`ON CONFLICT DO UPDATE` + `COALESCE` 保留已写 `publish_date`
 - **Query**: `get_macro_data`/`get_macro_matrix` 等 7 方法支持 `as_of`；`trade_date` 输出为 `COALESCE(period_date, trade_date)`；同期多行按 publish/loaded_at 取最新；legacy 行兜底
 - **Analytics**: `get_sector_sensitivity(..., as_of=None)` 按 `period_date` 对齐；P7 的率型 `diff` 默认保持不变
-- **生产迁移**: 4,358 行全部 `period_date` 非空；`exact` 2,295 / `estimated` 1,233 / `unknown` 830；CPI `2025-08-09`→period `2025-07-31`/publish `2025-08-09`/exact；PMI `2026-10-01`→period `2026-10-31`/estimated；GDP_QUARTERLY `2026-09-30`→publish `2026-10-17`；M2 `2020-02-17` 0.0 → `data_quality=50`；备份表 `macro_data_backup_20261105`
+- **生产迁移**: 4,358 行全部 `period_date` 非空；`exact` 2,295 / `estimated` 1,233 / `unknown` 830；CPI `2025-08-09`→period `2025-07-31`/publish `2025-08-09`/exact；PMI `2026-10-01`→period `2026-10-31`/estimated；GDP_QUARTERLY `2026-09-30`→publish `2026-10-17`；M2 `2020-02-17` 0.0 → `data_quality=50`；迁移前备份表 `macro_data_backup_20261105`（行数校验一致后已清理）
 - **PIT 验证**: `as_of=2025-08-05` 最高 CPI 期为 `2025-06-30`；`as_of=2025-08-15` 含 `2025-07-31`
 - **P7 复跑（统计期对齐）**: 默认 `diff` 31 行、`n_obs=44~306`、beta `-0.0307~0.0016`（中位 `-0.0079`）、区间 2000-01 ~ 2025-07-31，无 NaN；显式 `pct_change` 31 行、`n_obs=39~286`、beta `-0.0097~0.0038`。与 P7 旧锚点（`n_obs=45~186`、beta `-0.0113~0.0232`）差异主因：CPI 由发布月改为统计期后 x 前移一个月
 - **TDD**: 新增 26 用例（`tests/test_macro_temporal.py` 24 + 敏感度 2）；红灯 18 failed → 绿灯全量 **397 passed**，`ruff` 零告警

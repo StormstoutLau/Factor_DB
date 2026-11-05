@@ -662,7 +662,7 @@
 - [x] PMI `2026-10-01`→period `2026-10-31`/estimated；GDP_QUARTERLY `2026-09-30`→publish≈`2026-10-17`
 - [x] PIT：`as_of=2025-08-05` 排除 CPI 2025-07 期；`2025-08-15` 包含
 - [x] P7 CPI 敏感度按 period 重跑，记录新 beta 范围与 `n_obs`，与旧值对比
-- [x] 迁移备份表已确认可回滚，验收后按需清理
+- [x] 迁移备份表已确认可回滚（4,358 行与主表一致），验收后已清理
 
 ### 文档同步
 - [x] P8-0：`macro_factor_link.py` Notes、P5/P7 设计/实施文档、DEVLOG 的“trade_date=统计期”表述已修正

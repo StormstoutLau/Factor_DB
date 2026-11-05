@@ -191,7 +191,7 @@ print(stats)
 | PMI | `2026-10-01` → period `2026-10-31`、publish `2026-10-31`、`estimated` |
 | GDP_QUARTERLY | `2026-09-30` → period 同、publish `2026-10-17`、`estimated` |
 | M2 异常 | `2020-02-17` = 0.0、`data_quality=50`，保留原值 |
-| 备份 | `macro_data_backup_20261105` |
+| 备份 | `macro_data_backup_20261105`（4,358 行，与主表一致）已校验并于 2026-11-05 清理 |
 | 索引 | `idx_macro_period_date`、`idx_macro_publish_date` 已创建 |
 
 ### 6.2 PIT 查询实测
