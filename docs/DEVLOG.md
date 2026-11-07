@@ -7,6 +7,16 @@
 
 ## 2026-10（最近）
 
+### 五列宏观指标新鲜度 P8-1b：双阶段采集（2026-11-08）
+- **背景**: 金十 five-column 的 `CPI_MONTHLY`/`CPI_YEARLY`/`PPI_YEARLY`/`M2_YEARLY` 停更于 2025-07/08（约 15 个月、缺口 14 期），CPI 是行业宏观敏感度核心解释变量（[调研](research/macro_freshness_research.md)）
+- **方案**: 双阶段采集——history 保留旧源全历史（CPI 1986/1996、PPI 1995、M2 1998 ~ 2025-07，`exact` 发布日）；freshness 用东财 `macro_china_cpi`/`macro_china_ppi` 与月度表 `macro_china_money_supply` 追加 `trade_date >= 2025-08-01`，显式写 `period_date`（月末）、`publish_date`（CPI/PPI 次月 9 日、M2 次月 13 日）、`publish_date_quality='estimated'`
+- **配置**: 新增 `MacroSourceSpec` + `FRESHNESS_SOURCES`（4 指标）；取值列固定（CPI 环比/同比、PPI `当月同比增长`、M2 同比），避免启发式取到指数列
+- **失败隔离**: freshness 异常仅 warning，不置 `_error_state`；history 输出移除硬编码 `source_id`，统一由 `MacroLoader._fill_source_id` 注入 `akshare_macro`
+- **工程隐患**: `_resolve_function` 改为「显式 primary 优先、再回退 `FUNCTION_CANDIDATES`」，避免 M2 freshness 被旧源候选 `macro_china_m2_yearly` 抢走
+- **TDD**: 新增 16 例（`test_collect.py` 10 + `test_macro_freshness.py` 6）；红灯 11 failed → 绿灯全量 **413 passed**，`ruff` 零告警
+- **生产采集**: 4 指标各 +14 期（2025-08 ~ 2026-09），全表 4,358 → **4,414**；锚点 CPI 环比 0.0 / CPI 同比 -0.4 / PPI 同比 -2.9 / M2 同比 8.8；历史行（≤2025-07-31）不变；`GDP_YEARLY` 仍止于 2025-06-30；PIT `as_of=2025-09-05` 最高期 2025-07-31、`2025-09-15` 含 2025-08-31；二次采集幂等
+- **文档**: [调研](research/macro_freshness_research.md) / [设计](design/macro_freshness_design.md) / [实施](implementation/macro_freshness_implementation.md)；ARCHITECTURE 新增「宏观指标新鲜度双阶段采集（P8-1b）」
+
 ### 宏观数据时间语义与 PIT 对齐 P8-1（2026-11-05）
 - **背景**: `macro_data.trade_date` 长期混合“发布日/统计期起点/季末/日频观测”四种语义，导致 CPI 月份错位、PMI/PPI/M2/外储/进出口统计期前视 30~40 天（[P8-0 分析](research/post_p7_backlog_analysis.md)、[调研](research/macro_temporal_semantics_pit_research.md)）
 - **决策**（[ADR-0012](adr/0012-macro-temporal-pit.md)）: 保留 `trade_date` 为原始日期；新增 `period_date`（统计期）、`publish_date`（首次可得日）、`publish_date_quality`（exact/estimated/unknown）、`loaded_at`；主键不变

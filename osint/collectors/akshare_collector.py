@@ -10,14 +10,31 @@ from __future__ import annotations
 import logging
 import re
 from calendar import monthrange
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from Factor_DB.core.macro_temporal import estimate_publish_date
+
 from ..base import BaseCollector, OSINTEventType
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MacroSourceSpec:
+    """单个指标的 freshness 数据源规格"""
+
+    func_name: str
+    """AKShare 函数名，如 ``macro_china_cpi``"""
+
+    value_column: str
+    """目标取值列，如 ``全国-环比增长``"""
+
+    start_date: date
+    """起始 trade_date（含），如 ``date(2025, 8, 1)``"""
 
 
 class AKShareMacroCollector(BaseCollector):
@@ -70,6 +87,19 @@ class AKShareMacroCollector(BaseCollector):
         'IMPORT_EXPORT': ('macro_china_hgjck', 'macro_china_import_export'),
     }
 
+    # 金十 five-column 已停更的 4 个指标：追加新期时改用东财/月度多列表
+    # 起点 2025-08 对应旧源最后一期 2025-07（发布日 2025-08-09）
+    FRESHNESS_SOURCES: Dict[str, MacroSourceSpec] = {
+        'CPI_MONTHLY': MacroSourceSpec(
+            'macro_china_cpi', '全国-环比增长', date(2025, 8, 1)),
+        'CPI_YEARLY': MacroSourceSpec(
+            'macro_china_cpi', '全国-同比增长', date(2025, 8, 1)),
+        'PPI_YEARLY': MacroSourceSpec(
+            'macro_china_ppi', '当月同比增长', date(2025, 8, 1)),
+        'M2_YEARLY': MacroSourceSpec(
+            'macro_china_money_supply', '货币和准货币(M2)-同比增长', date(2025, 8, 1)),
+    }
+
     def setup(self):
         try:
             import akshare as ak
@@ -86,13 +116,22 @@ class AKShareMacroCollector(BaseCollector):
         return {'indicator': indicator, 'func_name': self.INDICATOR_MAP[indicator]}
 
     def _resolve_function(self, indicator: str, primary: str) -> Optional[str]:
-        """按候选顺序解析可用的 AKShare 函数名"""
+        """解析可用的 AKShare 函数名（显式 primary 优先，再回退候选）
+
+        先试 ``primary`` 是为了让 freshness 阶段的显式函数不被
+        ``FUNCTION_CANDIDATES`` 中的旧源候选覆盖；history 阶段的
+        primary 均为候选首项，行为不变。
+        """
         ak = getattr(self, '_ak', None)
         if ak is None:
             logger.error("AKShare 未初始化，无法解析函数: %s", primary)
             return None
 
-        for name in self.FUNCTION_CANDIDATES.get(indicator, (primary,)):
+        candidates = (primary,) + tuple(
+            name for name in self.FUNCTION_CANDIDATES.get(indicator, ())
+            if name != primary
+        )
+        for name in candidates:
             if hasattr(ak, name):
                 if name != primary:
                     logger.warning(f"指标 {indicator} 回退到候选函数: {name}")
@@ -100,6 +139,42 @@ class AKShareMacroCollector(BaseCollector):
 
         logger.error(f"指标 {indicator} 无可用 AKShare 函数: {primary}")
         return None
+
+    def collect(self, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """执行采集：history（金十全历史）+ freshness（东财/月度表新期）
+
+        freshness 仅对 ``FRESHNESS_SOURCES`` 中的 4 个指标执行；失败时
+        只记 warning 并返回 history，不置 ``_error_state``。
+        """
+        history = super().collect(params)
+        if self._error_state or self._stop:
+            return history
+
+        indicator = self.transform_query(params or {})['indicator']
+        if indicator not in self.FRESHNESS_SOURCES:
+            return history
+
+        freshness = self._collect_freshness(indicator)
+        if freshness.empty:
+            return history
+
+        self._collected_count += len(freshness)
+        if history.empty:
+            return freshness
+        return pd.concat([history, freshness], ignore_index=True)
+
+    def _collect_freshness(self, indicator: str) -> pd.DataFrame:
+        """执行 freshness 阶段；失败返回空表，不修改 ``_error_state``"""
+        spec = self.FRESHNESS_SOURCES[indicator]
+        try:
+            func = self._resolve_function(indicator, spec.func_name)
+            if func is None:
+                return pd.DataFrame()
+            raw = self.extract_data({'indicator': indicator, 'func_name': func})
+            return self.transform_data({'indicator': indicator, 'spec': spec}, raw)
+        except Exception as e:
+            logger.warning(f"宏观指标 {indicator} freshness 采集失败: {e}")
+            return pd.DataFrame()
 
     @staticmethod
     def _parse_trade_date(value: Any) -> Optional[date]:
@@ -183,27 +258,35 @@ class AKShareMacroCollector(BaseCollector):
             return None
         return func()
 
+    @staticmethod
+    def _detect_date_column(df: pd.DataFrame) -> Any:
+        """探测日期列：优先列名含日期/时间/月份等关键词，否则取首列"""
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if any(k in col_lower
+                   for k in ['日期', 'date', '时间', 'time', '年份', '月份', '季度']):
+                return col
+        return df.columns[0]
+
     def transform_data(self, query: Dict[str, Any], raw_data: Any) -> pd.DataFrame:
         """标准化为 macro_data 列
 
         日期语义：五列发布报告（今值/预测值/前值）的日期为发布日；
         中文月份/季度字符串为统计期（月初/季末）。
+        ``query`` 含 ``spec`` 时走 freshness 分支（追加新期）。
         """
         if raw_data is None or (isinstance(raw_data, pd.DataFrame) and raw_data.empty):
             return pd.DataFrame()
 
+        spec = query.get('spec')
+        if spec is not None:
+            return self._transform_freshness(
+                query['indicator'], spec, raw_data
+            )
+
         df = raw_data.copy()
 
-        date_col = None
-        for col in df.columns:
-            col_lower = str(col).lower()
-            if any(k in col_lower
-                   for k in ['日期', 'date', '时间', 'time', '年份', '月份', '季度']):
-                date_col = col
-                break
-
-        if date_col is None:
-            date_col = df.columns[0]
+        date_col = self._detect_date_column(df)
 
         parsed_dates = df[date_col].map(self._parse_trade_date)
         invalid_count = int(parsed_dates.isna().sum())
@@ -229,10 +312,63 @@ class AKShareMacroCollector(BaseCollector):
             'value': pd.to_numeric(df[value_col], errors='coerce'),
             'value_type': 'raw',
             'data_quality': 100,
-            'source_id': 'akshare',
         })
         result = result.dropna(subset=['value'])
         return result
+
+    def _transform_freshness(self, indicator: str, spec: MacroSourceSpec,
+                             raw_data: pd.DataFrame) -> pd.DataFrame:
+        """标准化 freshness 行：截断起点 + 显式统计期/发布日
+
+        不输出 ``source_id`` 列，由 ``MacroLoader._fill_source_id`` 注入
+        pipeline 传入的数据源 id。
+        """
+        df = raw_data.copy()
+        date_col = self._detect_date_column(df)
+        parsed_dates = df[date_col].map(self._parse_trade_date)
+        invalid_count = int(parsed_dates.isna().sum())
+        if invalid_count:
+            logger.warning(
+                f"宏观数据 {indicator} freshness 有 {invalid_count} 行日期无法解析，已丢弃"
+            )
+
+        valid_mask = parsed_dates.notna()
+        df = df[valid_mask]
+        parsed_dates = parsed_dates[valid_mask]
+        if df.empty:
+            logger.warning(f"宏观数据 {indicator} freshness 无有效日期行")
+            return pd.DataFrame()
+
+        if spec.value_column not in df.columns:
+            logger.error(
+                f"宏观数据 {indicator} freshness 缺少取值列: {spec.value_column}"
+            )
+            return pd.DataFrame()
+
+        result = pd.DataFrame({
+            'trade_date': parsed_dates.to_numpy(),
+            'indicator_id': indicator,
+            'indicator_name': indicator,
+            'value': pd.to_numeric(df[spec.value_column], errors='coerce').to_numpy(),
+            'value_type': 'raw',
+            'data_quality': 100,
+        })
+        result = result[result['trade_date'] >= spec.start_date]
+        result = result.dropna(subset=['value']).copy()
+        if result.empty:
+            return result
+
+        result['period_date'] = [
+            date(value.year, value.month,
+                 monthrange(value.year, value.month)[1])
+            for value in result['trade_date']
+        ]
+        result['publish_date'] = [
+            estimate_publish_date(indicator, value)
+            for value in result['period_date']
+        ]
+        result['publish_date_quality'] = 'estimated'
+        return result.reset_index(drop=True)
 
     def produced_events(self) -> List[OSINTEventType]:
         return [OSINTEventType.MACRO_ECONOMIC]

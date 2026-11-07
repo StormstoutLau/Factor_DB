@@ -64,7 +64,7 @@ Factor_DB/
 │   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
 │   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
 │   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
-├── tests/                       # Test Suite (397 tests, all passing)
+├── tests/                       # Test Suite (413 tests, all passing)
 ├── benchmarks/                  # Performance Benchmarks
 ├── docs/                        # Documentation
 └── cli.py                       # CLI Entry Point
@@ -332,7 +332,7 @@ DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions 
 python -m pytest tests/ -v
 ```
 
-**397 tests, all passing.** Coverage includes:
+**413 tests, all passing.** Coverage includes:
 
 | Test Suite | Tests | What's Covered |
 |-----------|-------|----------------|
@@ -354,10 +354,11 @@ python -m pytest tests/ -v
 | `test_cli.py` | 6 | CLI dispatch, read-only query/list-factors, validate exit code, help output |
 | `test_ic_decay.py` | 6 | IC decay curve across forward horizons, CLI `ic` / `ic-decay` |
 | `test_quantile_portfolio.py` | 5 | Quantile group returns, monotonicity, CLI `quantile` |
-| `test_collect.py` | 18 | Collector auto-discovery, AKShare fallback/normalization, CLI `collect` |
+| `test_collect.py` | 28 | Collector auto-discovery, AKShare fallback/normalization, freshness dual-phase, CLI `collect` |
 | `test_sw_industry.py` | 10 | SW industry routing, returns and CLI collect |
 | `test_macro_factor_link.py` | 17 | Sector monthly returns, auto diff/pct transforms, OLS sensitivity, `as_of` PIT |
 | `test_macro_temporal.py` | 24 | Macro date semantics, schema migration, loader temporal columns, query `as_of` PIT |
+| `test_macro_freshness.py` | 6 | Dual-phase collection end-to-end: truncation, explicit temporal columns, idempotency, PIT, GDP exclusion |
 
 ## Documentation
 

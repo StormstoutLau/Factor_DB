@@ -280,5 +280,204 @@ class TestMacroNormalization(unittest.TestCase):
         self.assertEqual('数值', col)
 
 
+class FreshnessAK:
+    """覆盖 history（金十 five-column）与 freshness（东财/月度表）双阶段的假模块"""
+
+    # ---- history：金十 five-column ----
+    @staticmethod
+    def macro_china_cpi_monthly():
+        return pd.DataFrame([
+            {'商品': 'CPI', '日期': '2025-08-09', '今值': 0.4, '预测值': 0.5, '前值': 0.1},
+            {'商品': 'CPI', '日期': '2025-09-10', '今值': None, '预测值': 0.2, '前值': 0.4},
+        ])
+
+    @staticmethod
+    def macro_china_cpi_yearly():
+        return pd.DataFrame([
+            {'商品': 'CPI', '日期': '2025-08-09', '今值': 0.0, '预测值': 0.1, '前值': -0.1},
+        ])
+
+    @staticmethod
+    def macro_china_ppi_yearly():
+        return pd.DataFrame([
+            {'商品': 'PPI', '日期': '2025-08-09', '今值': -3.6, '预测值': -3.4, '前值': -3.6},
+        ])
+
+    @staticmethod
+    def macro_china_m2_yearly():
+        # 旧源：用于验证 freshness 不会被 FUNCTION_CANDIDATES 抢走
+        return pd.DataFrame([
+            {'商品': 'M2', '日期': '2025-08-13', '今值': 8.8, '预测值': 8.9, '前值': 8.3},
+        ])
+
+    @staticmethod
+    def macro_china_gdp_yearly():
+        return pd.DataFrame([
+            {'商品': 'GDP', '日期': '2025-07-15', '今值': 5.2, '预测值': 5.1, '前值': 5.4},
+        ])
+
+    # ---- freshness：东财 / 月度表 ----
+    @staticmethod
+    def macro_china_cpi():
+        return pd.DataFrame([
+            {'月份': '2008年01月份', '全国-当月': 107.1,
+             '全国-同比增长': 7.1, '全国-环比增长': 1.2},
+            {'月份': '2025年07月份', '全国-当月': 100.4,
+             '全国-同比增长': 0.0, '全国-环比增长': 0.4},
+            {'月份': '2025年08月份', '全国-当月': 99.6,
+             '全国-同比增长': -0.4, '全国-环比增长': 0.0},
+            {'月份': '2025年09月份', '全国-当月': 99.7,
+             '全国-同比增长': -0.3, '全国-环比增长': 0.1},
+            {'月份': '2026年09月份', '全国-当月': 100.2,
+             '全国-同比增长': 0.9, '全国-环比增长': 0.2},
+        ])
+
+    @staticmethod
+    def macro_china_ppi():
+        return pd.DataFrame([
+            {'月份': '2006年01月份', '当月': 100.0, '当月同比增长': 0.0},
+            {'月份': '2025年07月份', '当月': 96.4, '当月同比增长': -3.6},
+            {'月份': '2025年08月份', '当月': 97.1, '当月同比增长': -2.9},
+            {'月份': '2026年09月份', '当月': 105.0, '当月同比增长': 5.0},
+        ])
+
+    @staticmethod
+    def macro_china_money_supply():
+        return pd.DataFrame([
+            {'月份': '2008年01月份',
+             '货币和准货币(M2)-数量(亿元)': 417846.17,
+             '货币和准货币(M2)-同比增长': 18.9},
+            {'月份': '2025年07月份',
+             '货币和准货币(M2)-数量(亿元)': 3299400.0,
+             '货币和准货币(M2)-同比增长': 8.8},
+            {'月份': '2025年08月份',
+             '货币和准货币(M2)-数量(亿元)': 3319100.0,
+             '货币和准货币(M2)-同比增长': 8.8},
+            {'月份': '2026年09月份',
+             '货币和准货币(M2)-数量(亿元)': 3596289.70,
+             '货币和准货币(M2)-同比增长': 7.2},
+        ])
+
+
+class BrokenFreshnessAK(FreshnessAK):
+    """freshness 函数抛异常的假模块"""
+
+    @staticmethod
+    def macro_china_cpi():
+        raise RuntimeError('freshness boom')
+
+
+class HistoryOnlyPPIAK:
+    """只有 history 函数的假模块（无 macro_china_ppi）"""
+
+    @staticmethod
+    def macro_china_ppi_yearly():
+        return pd.DataFrame([
+            {'商品': 'PPI', '日期': '2025-08-09', '今值': -3.6, '预测值': -3.4, '前值': -3.6},
+        ])
+
+
+class TestMacroFreshnessCollector(unittest.TestCase):
+    """P8-1b：双阶段采集（history + freshness）"""
+
+    def _collector(self, ak=None):
+        collector = AKShareMacroCollector()
+        collector._ak = ak or FreshnessAK()
+        collector._error_state = False
+        return collector
+
+    def _collect(self, indicator, ak=None):
+        return self._collector(ak).collect({'indicator': indicator})
+
+    def _freshness(self, indicator, ak=None):
+        return self._collector(ak)._collect_freshness(indicator)
+
+    def test_freshness_sources_config(self):
+        sources = AKShareMacroCollector.FRESHNESS_SOURCES
+        self.assertEqual(
+            {'CPI_MONTHLY', 'CPI_YEARLY', 'PPI_YEARLY', 'M2_YEARLY'},
+            set(sources),
+        )
+        self.assertNotIn('GDP_YEARLY', sources)
+        cpi = sources['CPI_MONTHLY']
+        self.assertEqual('macro_china_cpi', cpi.func_name)
+        self.assertEqual('全国-环比增长', cpi.value_column)
+        self.assertEqual(date(2025, 8, 1), cpi.start_date)
+        self.assertEqual('全国-同比增长', sources['CPI_YEARLY'].value_column)
+        self.assertEqual('当月同比增长', sources['PPI_YEARLY'].value_column)
+        self.assertEqual(
+            '货币和准货币(M2)-同比增长', sources['M2_YEARLY'].value_column
+        )
+        self.assertEqual('MacroSourceSpec', type(cpi).__name__)
+
+    def test_freshness_truncates_to_start_date(self):
+        df = self._freshness('CPI_MONTHLY')
+        self.assertEqual(
+            [date(2025, 8, 1), date(2025, 9, 1), date(2026, 9, 1)],
+            sorted(df['trade_date']),
+        )
+
+    def test_freshness_writes_explicit_temporal_columns(self):
+        cpi = self._freshness('CPI_MONTHLY')
+        row = cpi[cpi['trade_date'] == date(2025, 8, 1)].iloc[0]
+        self.assertEqual(date(2025, 8, 31), row['period_date'])
+        self.assertEqual(date(2025, 9, 9), row['publish_date'])
+        self.assertEqual('estimated', row['publish_date_quality'])
+
+        m2 = self._freshness('M2_YEARLY')
+        row = m2[m2['trade_date'] == date(2025, 8, 1)].iloc[0]
+        self.assertEqual(date(2025, 9, 13), row['publish_date'])
+
+    def test_freshness_uses_configured_value_column(self):
+        anchors = {
+            'CPI_MONTHLY': 0.0,
+            'CPI_YEARLY': -0.4,
+            'PPI_YEARLY': -2.9,
+            'M2_YEARLY': 8.8,
+        }
+        for indicator, expected in anchors.items():
+            df = self._freshness(indicator)
+            row = df[df['trade_date'] == date(2025, 8, 1)].iloc[0]
+            self.assertAlmostEqual(expected, float(row['value']), places=6,
+                                   msg=indicator)
+
+    def test_collect_merges_history_and_freshness(self):
+        df = self._collect('CPI_MONTHLY')
+        self.assertEqual(
+            [date(2025, 8, 1), date(2025, 8, 9), date(2025, 9, 1), date(2026, 9, 1)],
+            sorted(df['trade_date']),
+        )
+        history = df[df['trade_date'] == date(2025, 8, 9)].iloc[0]
+        self.assertAlmostEqual(0.4, float(history['value']), places=6)
+        latest = df[df['trade_date'] == date(2026, 9, 1)].iloc[0]
+        self.assertAlmostEqual(0.2, float(latest['value']), places=6)
+
+    def test_gdp_yearly_stays_history_only(self):
+        df = self._collect('GDP_YEARLY')
+        self.assertEqual(1, len(df))
+        self.assertEqual([date(2025, 7, 15)], list(df['trade_date']))
+        self.assertNotIn('period_date', df.columns)
+
+    def test_freshness_failure_does_not_set_error_state(self):
+        collector = self._collector(BrokenFreshnessAK())
+        df = collector.collect({'indicator': 'CPI_MONTHLY'})
+        self.assertEqual([date(2025, 8, 9)], list(df['trade_date']))
+        self.assertFalse(collector._error_state)
+
+    def test_freshness_missing_function_returns_history(self):
+        df = self._collect('PPI_YEARLY', ak=HistoryOnlyPPIAK())
+        self.assertEqual([date(2025, 8, 9)], list(df['trade_date']))
+
+    def test_history_output_has_no_source_id_column(self):
+        df = self._collect('CPI_MONTHLY')
+        self.assertNotIn('source_id', df.columns)
+
+    def test_m2_freshness_prefers_money_supply_over_stale_yearly(self):
+        df = self._collect('M2_YEARLY')
+        self.assertIn(date(2025, 8, 13), set(df['trade_date']))
+        latest = df[df['trade_date'] == date(2026, 9, 1)].iloc[0]
+        self.assertAlmostEqual(7.2, float(latest['value']), places=6)
+
+
 if __name__ == '__main__':
     unittest.main()

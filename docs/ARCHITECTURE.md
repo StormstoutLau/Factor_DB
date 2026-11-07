@@ -209,6 +209,9 @@ PRIMARY KEY (trade_date, indicator_id, value_type)
 ### 宏观数据时间语义与 PIT（P8-1）
 `macro_data` 从「单日期混合语义」升级为双日期模型（ADR-0012）：`trade_date` 保留原始采集日期，新增 `period_date`（统计期）、`publish_date`（首次可得日）、`publish_date_quality`（`exact`/`estimated`/`unknown`）与 `loaded_at`（入库时间）。规则表 `core/macro_temporal.py` 覆盖 12 个 AKShare 指标：CPI/PPI/M2/GDP 同比等发布日型按“前一月末/季末”回推统计期；PMI/PPI 环比/M2 环比/外储/进出口等月首型统一到月末；`GDP_QUARTERLY` 保持季末；`INTEREST_RATE` 日频观测按月末归档。`MacroLoader` 自动补齐缺失时间列并保留已写入的 `publish_date`；`MacroQuery` 以 `COALESCE(period_date, trade_date)` 输出统计期并按 `as_of` 过滤（`publish_date` 缺失时回退 `loaded_at`），同期多行取最新。生产库迁移 4,358 行（`period_date` 非空 100%，`exact` 2,295 / `estimated` 1,233 / `unknown` 830），CPI `2025-08-09` → period `2025-07-31`、publish `2025-08-09`。
 
+### 宏观指标新鲜度双阶段采集（P8-1b）
+`AKShareMacroCollector.collect` 覆写为两阶段：history 阶段沿用金十 five-column（`INDICATOR_MAP` 不变，保留 CPI/PPI/M2 同比全历史与 `exact` 发布日）；freshness 阶段仅对 `FRESHNESS_SOURCES` 中 4 个指标（`CPI_MONTHLY`/`CPI_YEARLY`/`PPI_YEARLY`/`M2_YEARLY`）调用东财 `macro_china_cpi`/`macro_china_ppi` 与月度表 `macro_china_money_supply`，按 `trade_date >= 2025-08-01` 截断，显式写入 `period_date`（月末）、`publish_date`（CPI/PPI 次月 9 日、M2 次月 13 日）与 `publish_date_quality='estimated'`。取值列由 `MacroSourceSpec` 固定，禁用启发式（PPI `当月`、CPI `全国-当月` 是价格指数而非同比）。两阶段结果合并后由 `MacroLoader` 统一入库；freshness 失败仅告警、不置 `_error_state`，不影响 history 与其他指标。`_resolve_function` 采用「显式 primary 优先、再回退 `FUNCTION_CANDIDATES`」，避免 M2 freshness 被旧源候选覆盖。生产实测 2025-08 ~ 2026-09 每指标 +14 期，全表 4,414 行；`GDP_YEARLY` 因单季同比与东财累计同比口径不同不参与。
+
 ### 宏观采集归一化（P6）
 `AKShareMacroCollector.transform_data` 用正则解析中文期间：`YYYY年MM月份` → 当月 1 日、`YYYY年第N[-M]季度` → 季末；五列发布报告优先取 `今值`（不再取 `前值`）；多列统计表按 `VALUE_COLUMNS` 映射主数据列（GDP 绝对值 / PPI 当月 / PMI 制造业指数 / M2 数量 / 外储数值 / 出口金额），未知指标回退首个匹配列。生产库重采 12 个指标，实际入库 4,358 行（63 行 `今值` 为空被丢弃）。
 

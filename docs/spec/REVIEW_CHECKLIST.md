@@ -669,3 +669,46 @@
 - [x] DEVLOG 新增 P8-1 条目；ARCHITECTURE/CODE_WIKI 补充字段与 PIT 语义
 - [x] README/README_zh 测试数 371 → 397；README 测试表新增 `test_macro_temporal.py` 24
 
+---
+
+## 二十二、五列宏观指标新鲜度（P8-1b）（2026-11-05）
+
+来源：[调研](../research/macro_freshness_research.md) / [设计](../design/macro_freshness_design.md) / [实施](../implementation/macro_freshness_implementation.md)
+
+> 状态：**已验收**（2026-11-08），全部项通过。
+
+### 事实与设计
+- [x] 旧源停更事实与调研 §2 一致（CPI/PPI/M2 最后有效值 2025-07/08）
+- [x] 新源 4 函数、取值列、覆盖 2025-08~2026-09 与调研 §3 一致
+- [x] D1-D10 均可回溯；`GDP_YEARLY` 排除理由（累计同比 vs 单季同比）成立
+- [x] E1：M2 freshness 解析顺序已修正（`primary` 优先），不与旧源候选冲突
+
+### 实现
+- [x] `FRESHNESS_SOURCES` 恰含 4 指标，不含 `GDP_YEARLY`
+- [x] freshness 截断 `trade_date >= 2025-08-01`，不写入重叠区修订值
+- [x] 显式写入 `period_date`（月末）/`publish_date`/`publish_date_quality='estimated'`
+- [x] 取值列由配置固定，未走启发式（CPI 环比/同比、PPI 同比、M2 同比）
+- [x] history 输出移除硬编码 `source_id`，由 `MacroLoader._fill_source_id` 注入 `akshare_macro`
+- [x] freshness 失败仅 warning，不置 `_error_state`，不影响 history 与其他指标
+- [x] `collect` 签名、`transform_query`、Loader/Query/CLI/schema 均未改
+
+### TDD 与回归
+- [x] 红灯：定向 34 例中 **11 failed / 23 passed**（5 个历史行为守护用例实现前已通过）
+- [x] 绿灯：`tests/test_collect.py` + `tests/test_macro_freshness.py` **34 passed**
+- [x] 全量 **413 passed**（397 + 16）；`ruff check .` All checks passed
+
+### 生产采集与验收
+- [x] 4 指标各新增 14 期，最新统计期 `2026-09-30`
+- [x] 2025-08 锚点：CPI 环比 0.0 / CPI 同比 -0.4 / PPI 同比 -2.9 / M2 同比 8.8
+- [x] `CPI_MONTHLY` period `2025-08-31`、publish `2025-09-09`、`estimated`
+- [x] ≤2025-07-31 历史行数保持 354/475/361/337；`GDP_YEARLY` 仍止于 `2025-06-30`
+- [x] 全表行数 4,358 → **4,414**（+56，无历史补缺偏差）
+- [x] 4 指标 `source_id='akshare_macro'`（单值）
+- [x] 幂等：二次采集 CPI_MONTHLY 后行数与 trade_date 数不变
+- [x] PIT：`as_of=2025-09-05` 最高期 `2025-07-31`；`2025-09-15` 最高期 `2025-08-31`
+
+### 文档同步
+- [x] DEVLOG 新增 P8-1b 条目；ARCHITECTURE 新增双阶段采集说明（CODE_WIKI 无 OSINT 模块章节，不涉及）
+- [x] README/README_zh 测试数 397 → 413；README 测试表更新 `test_collect.py` 28 + 新增 `test_macro_freshness.py` 6
+- [x] 设计 §3.2 E1 说明与实施一致
+
