@@ -65,7 +65,7 @@ Factor_DB/
 │   ├── multi_source_analysis.py
 │   └── sentiment_factor.py
 ├── osint/                   # OSINT 数据采集
-│   ├── collectors/          # akshare/government/news_rss/sw_industry/worldbank
+│   ├── collectors/          # akshare/government/nbs_gdp/news_rss/sw_industry/worldbank
 │   ├── base.py / pipeline.py / registry.py
 ├── utils/                   # 工具模块
 │   ├── code_utils.py        # normalize_stock_code()
@@ -73,7 +73,7 @@ Factor_DB/
 │   ├── config.py            # AppLoaderConfig
 │   ├── logger.py / validators.py
 ├── scripts/                 # 导入脚本（按 phase 组织）
-├── tests/                   # 测试套件（397 测试）
+├── tests/                   # 测试套件（427 测试）
 ├── benchmarks/              # 基准测试
 ├── cli.py                   # CLI（12 子命令，含 collect / ic / ic-decay / quantile / validate）
 └── docs/                    # 文档（含 spec/adr）
@@ -211,6 +211,9 @@ PRIMARY KEY (trade_date, indicator_id, value_type)
 
 ### 宏观指标新鲜度双阶段采集（P8-1b）
 `AKShareMacroCollector.collect` 覆写为两阶段：history 阶段沿用金十 five-column（`INDICATOR_MAP` 不变，保留 CPI/PPI/M2 同比全历史与 `exact` 发布日）；freshness 阶段仅对 `FRESHNESS_SOURCES` 中 4 个指标（`CPI_MONTHLY`/`CPI_YEARLY`/`PPI_YEARLY`/`M2_YEARLY`）调用东财 `macro_china_cpi`/`macro_china_ppi` 与月度表 `macro_china_money_supply`，按 `trade_date >= 2025-08-01` 截断，显式写入 `period_date`（月末）、`publish_date`（CPI/PPI 次月 9 日、M2 次月 13 日）与 `publish_date_quality='estimated'`。取值列由 `MacroSourceSpec` 固定，禁用启发式（PPI `当月`、CPI `全国-当月` 是价格指数而非同比）。两阶段结果合并后由 `MacroLoader` 统一入库；freshness 失败仅告警、不置 `_error_state`，不影响 history 与其他指标。`_resolve_function` 采用「显式 primary 优先、再回退 `FUNCTION_CANDIDATES`」，避免 M2 freshness 被旧源候选覆盖。生产实测 2025-08 ~ 2026-09 每指标 +14 期，全表 4,414 行；`GDP_YEARLY` 因单季同比与东财累计同比口径不同不参与。
+
+### GDP_YEARLY 单季同比源（P8-1c）
+新增独立 `NBSGDPCollector`（`source_id='nbs_gdp'`），解决金十 `macro_china_gdp_yearly` 停更后的单季同比缺口：扫描 `https://www.stats.gov.cn/sj/zxfb/` 第 1~6 页，按标题正则匹配 GDP 初步核算新闻稿，经 host/path 白名单与 URL 去重后按 URL 日期降序取最新 2 个详情页；详情页用「表头在前 3 行 + 表前 900 字符 context（`GDP同比增长速度` vs `GDP环比增长速度`）」双重校验定位同比表，跳过 `\u2002`/`--`/`...` 等空 token，同统计期保留最新页面值。输出 `trade_date = period_date = 季末`、`publish_date = 季末 + 17 天`、`publish_date_quality='estimated'`，只追加 `period_date >= 2025-09-30`，历史仍由 `akshare_macro` 保留。失败时单页告警并由 `collect` 覆写复位 `_error_state`，不阻断其他采集器。生产实测 +5 期（2025Q3 4.8 / 2025Q4 4.5 / 2026Q1 5.0 / 2026Q2 4.3 / 2026Q3 4.5），`GDP_YEARLY` 59 → 64、全表 4,414 → 4,419。
 
 ### 宏观采集归一化（P6）
 `AKShareMacroCollector.transform_data` 用正则解析中文期间：`YYYY年MM月份` → 当月 1 日、`YYYY年第N[-M]季度` → 季末；五列发布报告优先取 `今值`（不再取 `前值`）；多列统计表按 `VALUE_COLUMNS` 映射主数据列（GDP 绝对值 / PPI 当月 / PMI 制造业指数 / M2 数量 / 外储数值 / 出口金额），未知指标回退首个匹配列。生产库重采 12 个指标，实际入库 4,358 行（63 行 `今值` 为空被丢弃）。

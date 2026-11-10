@@ -7,6 +7,17 @@
 
 ## 2026-10（最近）
 
+### GDP_YEARLY 单季同比源 P8-1c：NBS 官网采集器（2026-11-10）
+- **背景**: 旧源 `macro_china_gdp_yearly` 停更于 2025-07-15（末值 2025Q2=5.2），缺口 5 个季度；东财 `macro_china_gdp` 为累计同比，不能替换单季同比（[调研](research/gdp_yearly_source_research.md)）
+- **方案**: 新增独立 `NBSGDPCollector`（`source_id='nbs_gdp'`），扫描 `https://www.stats.gov.cn/sj/zxfb/` 第 1~6 页，按标题正则匹配 GDP 初步核算新闻稿；经 host/path 白名单与 URL 去重后按 URL 日期降序取最新 2 个详情页；详情页用「表头在前 3 行 + 表前 900 字符 context（同比增长 vs 环比）」双重校验定位表 2，跳过 `\u2002`/`--`/`...` 等空 token，同统计期保留最新页面值
+- **时间语义**: `trade_date = period_date = 季末`；`publish_date = 季末 + 17 天`；`publish_date_quality='estimated'`；只追加 `period_date >= 2025-09-30`，历史仍由 `akshare_macro` 保留
+- **社区参考**: MIDAS 的 context 分类/表头网格/URL 日期/分页；FenLynn 的表头匹配 + `urljoin`；alphalake 的官方 host/path allowlist
+- **失败隔离**: 单页 try/except + `collect` 覆写 `reset_error()`；不重复累加计数、不追加 ERROR 事件
+- **TDD**: 新增 14 例；红灯 `ModuleNotFoundError` → 绿灯 `tests/test_nbs_gdp.py` **14 passed**；全量 **413 → 427 passed**，`ruff` 零告警
+- **生产采集**: 5 期 2025Q3=4.8 / 2025Q4=4.5 / 2026Q1=5.0 / 2026Q2=4.3 / 2026Q3=4.5；`GDP_YEARLY` 59 → **64**，全表 4,414 → **4,419**；历史 59 行 md5 不变；source 分布 59 `akshare_macro` + 5 `nbs_gdp`；二次采集幂等
+- **PIT**: `as_of=2025-10-16` 最新期 2025-06-30；`2025-10-18` → 2025-09-30；`2026-01-16` → 2025-09-30；`2026-01-18` → 2025-12-31
+- **文档**: [调研](research/gdp_yearly_source_research.md) / [设计](design/gdp_yearly_source_design.md) / [实施](implementation/gdp_yearly_source_implementation.md) / [checklist](spec/REVIEW_CHECKLIST.md) 第二十三节；ARCHITECTURE 新增「GDP_YEARLY 单季同比源（P8-1c）」
+
 ### 五列宏观指标新鲜度 P8-1b：双阶段采集（2026-11-08）
 - **背景**: 金十 five-column 的 `CPI_MONTHLY`/`CPI_YEARLY`/`PPI_YEARLY`/`M2_YEARLY` 停更于 2025-07/08（约 15 个月、缺口 14 期），CPI 是行业宏观敏感度核心解释变量（[调研](research/macro_freshness_research.md)）
 - **方案**: 双阶段采集——history 保留旧源全历史（CPI 1986/1996、PPI 1995、M2 1998 ~ 2025-07，`exact` 发布日）；freshness 用东财 `macro_china_cpi`/`macro_china_ppi` 与月度表 `macro_china_money_supply` 追加 `trade_date >= 2025-08-01`，显式写 `period_date`（月末）、`publish_date`（CPI/PPI 次月 9 日、M2 次月 13 日）、`publish_date_quality='estimated'`

@@ -712,3 +712,86 @@
 - [x] README/README_zh 测试数 397 → 413；README 测试表更新 `test_collect.py` 28 + 新增 `test_macro_freshness.py` 6
 - [x] 设计 §3.2 E1 说明与实施一致
 
+---
+
+## 二十三、GDP_YEARLY 单季同比源（P8-1c）（2026-11-09）
+
+来源：[调研](../research/gdp_yearly_source_research.md) / [设计](../design/gdp_yearly_source_design.md)（§10 评审）/ [实施](../implementation/gdp_yearly_source_implementation.md)（§9 评审）
+
+> 状态：**已验收**（2026-11-10；实现/生产/文档项全部通过，提交与 CI 待在交付步骤勾选）。
+
+### 事实与设计
+- [x] 旧源停更事实与调研 §2 一致：末行 2025-07-15=5.2（2025Q2），缺口 5 个季度
+- [x] 拼接锚点 2025Q2 新旧源一致（5.2）；新增 5 期值 4.8/4.5/5.0/4.3/4.5 有 NBS 页面与日历交叉验证（调研 §4/§5）
+- [x] 未替换 2010Q4~2025Q2 历史；未使用东财累计同比推导；未接入 NBS 国家数据 API/付费源
+- [x] D1-D14 均可回溯到调研章节或源码行号；设计 §10 的 R1-R4 修正已落实
+- [x] 实施规划 §9 的 F1（空结果 warning 含最大统计期）、F2（双份同比表夹具）已落实
+
+### 文档一致性（调研 → 设计 → 实施）
+- [x] 数字一致：`GDP_YEARLY` 59 → 64；`macro_data` 4,414 → 4,419；新增 5 期；测试 413 → 427
+- [x] 时间语义一致：`trade_date = period_date = 季末`；`publish_date` = 季末 +17 天；`publish_date_quality='estimated'`
+- [x] 接口签名一致：`collect` / `extract_data` / `transform_data` 在设计与实施文档相同
+- [x] 术语与 ID 一致：采集器 `nbs_gdp`；新行 `source_id='nbs_gdp'`；旧行 `akshare_macro`
+- [x] 限制声明一致：表 2 仅覆盖 2021+；PubDate 不适用于整表；发布日估算误差 -3~+2 天
+
+### 实现
+- [x] 新增 `osint/collectors/nbs_gdp_collector.py`；`meta['name']='nbs_gdp'`；`auto_discover()` 注册数 5 → 6
+- [x] 发现：标题正则 `\d{4}年.*季度.*国内生产总值初步核算结果`；`urljoin`；URL allowlist（host `www.stats.gov.cn`、path `/sj/`、无 query/fragment）
+- [x] 发现：**先按 URL 去重再计入** `max_detail_pages`（实测第 1 页同一 URL 重复 3 次）
+- [x] 发现：详情页按 URL 内 `tYYYYMMDD` 降序，最多 2 个；无日期链接排后
+- [x] 解析：表头在**前 3 个 `<tr>`** 内定位（实测首行为「单位：%」）；表头网格 `年份 + 1~4季度`
+- [x] 解析：表前 context `rfind` 同比 > 环比才解析；实测表 2 `pos_yoy=158`、表 3 `pos_yoy=-1`，表 1 无网格 → 均正确跳过
+- [x] 解析：`\u2002`（EN SPACE）、`''`、`--`、`...`、`…`、`-`、`—` 跳过；非数值 warning 不中断
+- [x] 去重：同 `period_date` 保留最新页面值；同页桌面/移动双表去重
+- [x] 标准化：输出 9 列且**不含 `source_id`**；`indicator_id/name='GDP_YEARLY'`；`value_type='raw'`；`data_quality=100`
+- [x] 空结果 warning 含「已解析到的最大统计期」，可区分页面滞后与解析失败
+- [x] `collect` 覆写：失败后 `reset_error()`；**不重复累加** `_collected_count`；不追加 ERROR 事件（由 warning 承担可见性）
+- [x] 未改 `core/schema.py`、`core/macro_temporal.py`、`loaders/macro_loader.py`、`query/macro_query.py`、`osint/base.py`、`osint/pipeline.py`、`osint/registry.py`、`osint/collectors/__init__.py`、`cli.py`、`akshare_collector.py`、`pyproject.toml`
+
+### TDD 与回归
+- [x] 红灯：模块不存在时 `tests/test_nbs_gdp.py` 14 例全部失败
+- [x] 绿灯：`tests/test_nbs_gdp.py` **14 passed**
+- [x] 全量 **427 passed**（413 + 14）；`ruff check .` 零告警
+- [x] 既有 413 例零修改、零失败；`test_collect.py` 发现断言仍通过
+
+### 生产采集与验收
+- [x] 采集前基线：`macro_data` 4,414；`GDP_YEARLY` 59 行；`MAX(period_date)=2025-06-30`；`MAX(publish_date)=2025-07-15`
+- [x] `collect --source nbs_gdp` 输出 **5 条**
+- [x] `GDP_YEARLY` 59 → **64**；`macro_data` 4,414 → **4,419**
+- [x] 5 期值与 `period_date`：2025Q3=4.8@09-30、2025Q4=4.5@12-31、2026Q1=5.0@03-31、2026Q2=4.3@06-30、2026Q3=4.5@09-30
+- [x] 5 期 `publish_date`：2025-10-17、2026-01-17、2026-04-17、2026-07-17、2026-10-17；均 `estimated`
+- [x] `source_id`：新 5 行 `nbs_gdp`；旧 59 行 `akshare_macro` 不变
+- [x] 历史：`period_date <= 2025-06-30` 的 59 行值/日期不变（md5 `fef42d21daff0eb7bf64a93beb71787b`）
+- [x] 幂等：二次采集后仍 64 行 / 4,419 行
+- [x] PIT：`as_of=2025-10-16` 不含 2025Q3，`2025-10-18` 含；`2026-01-16` 不含 2025Q4，`2026-01-18` 含
+- [x] `collect --list` 出现 `nbs_gdp`；`--source nbs_gdp` 可运行
+- [x] 失败演练：不可达 URL / 空页面 → 空表 + warning + `_error_state=False` + 库无变化（单测 12）
+- [x] 回滚 SQL 在临时库验证：仅删除 `source_id='nbs_gdp' AND period_date >= 2025-09-30` 的新行
+
+### 交付与文档同步
+- [x] 实施规划 §7.5 回填实测值
+- [x] DEVLOG 新增 P8-1c 条目（NBS 源、拼接点、发布日 estimated）
+- [x] ARCHITECTURE 采集器列表加入 `nbs_gdp`（5 → 6）
+- [x] README/README_zh 测试数 413 → 427；测试表新增 `test_nbs_gdp.py` 14
+- [x] CODE_WIKI 如有 OSINT/采集器章节则同步；无则记录「不涉及」（grep 无匹配，不涉及）
+- [ ] 本 checklist §23 全部勾选（提交/CI 项待交付）
+- [ ] 提交并推送；CI success
+
+### 验收命令
+
+```powershell
+py -3.12 -m pytest tests/test_nbs_gdp.py -q
+py -3.12 -m pytest -q
+py -3.12 -m ruff check .
+py -3.12 -m Factor_DB.cli collect --list
+py -3.12 -m Factor_DB.cli collect --source nbs_gdp --db factor_db.duckdb
+```
+
+```sql
+SELECT COUNT(*) FROM macro_data;
+SELECT COUNT(*), MAX(period_date) FROM macro_data WHERE indicator_id='GDP_YEARLY';
+SELECT period_date, value, publish_date, publish_date_quality, source_id
+FROM macro_data WHERE indicator_id='GDP_YEARLY'
+ORDER BY period_date DESC LIMIT 7;
+```
+

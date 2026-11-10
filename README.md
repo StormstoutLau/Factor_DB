@@ -64,7 +64,7 @@ Factor_DB/
 │   ├── import_phase3_csmar.py   #   Phase 3: CSMAR factor data import
 │   ├── convert_level1_parquet.py#   Feather → Parquet partition conversion
 │   └── rebuild_factor_data.py   #   Rebuild factor_data view from wide table
-├── tests/                       # Test Suite (413 tests, all passing)
+├── tests/                       # Test Suite (427 tests, all passing)
 ├── benchmarks/                  # Performance Benchmarks
 ├── docs/                        # Documentation
 └── cli.py                       # CLI Entry Point
@@ -332,7 +332,7 @@ DuckDB reads Parquet with `hive_partitioning=true` — only relevant partitions 
 python -m pytest tests/ -v
 ```
 
-**413 tests, all passing.** Coverage includes:
+**427 tests, all passing.** Coverage includes:
 
 | Test Suite | Tests | What's Covered |
 |-----------|-------|----------------|
@@ -359,6 +359,7 @@ python -m pytest tests/ -v
 | `test_macro_factor_link.py` | 17 | Sector monthly returns, auto diff/pct transforms, OLS sensitivity, `as_of` PIT |
 | `test_macro_temporal.py` | 24 | Macro date semantics, schema migration, loader temporal columns, query `as_of` PIT |
 | `test_macro_freshness.py` | 6 | Dual-phase collection end-to-end: truncation, explicit temporal columns, idempotency, PIT, GDP exclusion |
+| `test_nbs_gdp.py` | 14 | NBS GDP discovery/dedupe/date-sort, table classification, temporal columns, failure isolation, loader idempotency, PIT |
 
 ## Documentation
 
