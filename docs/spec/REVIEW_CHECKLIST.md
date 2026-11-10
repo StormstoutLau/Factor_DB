@@ -718,7 +718,7 @@
 
 来源：[调研](../research/gdp_yearly_source_research.md) / [设计](../design/gdp_yearly_source_design.md)（§10 评审）/ [实施](../implementation/gdp_yearly_source_implementation.md)（§9 评审）
 
-> 状态：**已验收**（2026-11-10；实现/生产/文档项全部通过，提交与 CI 待在交付步骤勾选）。
+> 状态：**已验收**（2026-11-10，全部项通过）。
 
 ### 事实与设计
 - [x] 旧源停更事实与调研 §2 一致：末行 2025-07-15=5.2（2025Q2），缺口 5 个季度
@@ -774,8 +774,8 @@
 - [x] ARCHITECTURE 采集器列表加入 `nbs_gdp`（5 → 6）
 - [x] README/README_zh 测试数 413 → 427；测试表新增 `test_nbs_gdp.py` 14
 - [x] CODE_WIKI 如有 OSINT/采集器章节则同步；无则记录「不涉及」（grep 无匹配，不涉及）
-- [ ] 本 checklist §23 全部勾选（提交/CI 项待交付）
-- [ ] 提交并推送；CI success
+- [x] 本 checklist §23 全部勾选
+- [x] 提交并推送；CI success（commit `41f18bf`，run `42754372733`）
 
 ### 验收命令
 
